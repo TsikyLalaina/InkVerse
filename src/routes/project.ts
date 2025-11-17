@@ -5,9 +5,12 @@ const ChatTypeEnum = z.enum(['plot','character','world']);
 
 const uuidParam = z.object({ id: z.string().uuid() });
 const createBody = z.object({ title: z.string().min(1), description: z.string().optional() });
-const ModeEnum = z.enum(['novel', 'manhwa']);
+const ModeEnum = z.enum(['novel', 'manhwa', 'convert']);
 const updateBody = z.object({ title: z.string().min(1).optional(), description: z.string().optional(), mode: ModeEnum.optional() }).refine((v) => Object.keys(v).length > 0, { message: 'No fields to update' });
 const settingsBody = z.object({
+  title: z.string().min(1).optional(),
+  description: z.string().optional(),
+  coverImage: z.string().url().optional(),
   genre: z.string().optional(),
   coreConflict: z.string().optional(),
   settingsJson: z.any().optional(),
@@ -26,7 +29,7 @@ const characterCreateBody = z.object({
   name: z.string().min(1),
   role: z.string().optional(),
   summary: z.string().optional(),
-  imageUrl: z.string().url().optional(),
+  images: z.array(z.string().url()).optional(),
   traits: z.any().optional(),
   traitsOps: z.array(traitsOp).optional(),
 });
@@ -34,7 +37,7 @@ const characterUpdateBody = z.object({
   name: z.string().min(1).optional(),
   role: z.string().optional(),
   summary: z.string().optional(),
-  imageUrl: z.string().url().optional().nullable(),
+  images: z.array(z.string().url()).optional(),
   traits: z.any().optional(),
   traitsOps: z.array(traitsOp).optional(),
 }).refine((v) => Object.keys(v).length > 0, { message: 'No fields to update' });
@@ -394,6 +397,9 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     if (!existing) return reply.code(404).send({ error: 'Not found' });
 
     const data: any = {};
+    if (body.title !== undefined) data.title = body.title;
+    if (body.description !== undefined) data.description = body.description;
+    if (body.coverImage !== undefined) data.coverImage = body.coverImage;
     if (body.genre !== undefined) data.genre = body.genre;
     if (body.coreConflict !== undefined) data.coreConflict = body.coreConflict;
     if (body.settingsJson !== undefined) {
@@ -419,6 +425,7 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
         id: true,
         title: true,
         description: true,
+        coverImage: true,
         // @ts-ignore
         mode: true as any,
         // @ts-ignore
@@ -528,9 +535,14 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     const items = await (prisma as any).character.findMany({
       where: { projectId: project.id },
       orderBy: { createdAt: 'asc' },
+      // images column may or may not exist yet; select imageUrl and compute images on the fly
       select: { id: true, name: true, role: true, summary: true, traits: true, imageUrl: true, createdAt: true, updatedAt: true },
     } as any);
-    return reply.send(items);
+    const withImages = (items as any[]).map((c: any) => ({
+      ...c,
+      images: (c as any).images ?? (c.imageUrl ? [c.imageUrl] : []),
+    }));
+    return reply.send(withImages);
   });
 
   app.post('/project/:id/characters', async (req, reply) => {
@@ -540,17 +552,24 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true, mode: true } as any });
     if (!project) return reply.code(404).send({ error: 'Not found' });
     const body = characterCreateBody.parse(req.body);
-    if ((project as any).mode === 'manhwa' && !body.imageUrl) {
-      return reply.code(400).send({ error: 'imageUrl is required in manhwa mode' });
+    if ((project as any).mode === 'manhwa' && !(body.images && body.images.length)) {
+      return reply.code(400).send({ error: 'At least one image is required in manhwa mode' });
     }
     let traits: any = undefined;
     if (Array.isArray(body.traitsOps) && body.traitsOps.length) traits = applyTraitsOps({}, body.traitsOps as any);
     else if (body.traits !== undefined) traits = body.traits;
     const created = await (prisma as any).character.create({
-      data: { projectId: project.id, name: body.name, role: body.role ?? null, summary: body.summary ?? null, imageUrl: body.imageUrl ?? null, traits: traits ?? null },
+      data: { projectId: project.id, name: body.name, role: body.role ?? null, summary: body.summary ?? null, imageUrl: (body.images && body.images[0]) ? body.images[0] : null, traits: traits ?? null },
       select: { id: true, name: true, role: true, summary: true, traits: true, imageUrl: true, createdAt: true },
     } as any);
-    return reply.code(201).send(created);
+    // Best-effort: update images JSON column if present
+    if (Array.isArray(body.images)) {
+      try {
+        await (prisma as any).character.update({ where: { id: created.id }, data: { images: body.images } } as any);
+      } catch {}
+    }
+    const result = { ...created, images: Array.isArray(body.images) ? body.images : (created.imageUrl ? [created.imageUrl] : []) };
+    return reply.code(201).send(result);
   });
 
   app.patch('/project/:id/characters/:charId', async (req, reply) => {
@@ -560,8 +579,8 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true, mode: true } as any });
     if (!project) return reply.code(404).send({ error: 'Not found' });
     const body = characterUpdateBody.parse(req.body);
-    if ((project as any).mode === 'manhwa' && body.imageUrl === null) {
-      return reply.code(400).send({ error: 'imageUrl cannot be removed in manhwa mode' });
+    if ((project as any).mode === 'manhwa' && (body.images !== undefined) && (!body.images || body.images.length === 0)) {
+      return reply.code(400).send({ error: 'Cannot remove all images in manhwa mode' });
     }
     // Load existing to apply traitsOps
     const existing = await (prisma as any).character.findFirst({ where: { id: params.charId, projectId: project.id }, select: { traits: true } });
@@ -575,13 +594,20 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
         name: body.name ?? undefined,
         role: body.role ?? undefined,
         summary: body.summary ?? undefined,
-        imageUrl: (body.imageUrl === null ? undefined : (body.imageUrl ?? undefined)),
+        imageUrl: Array.isArray(body.images) ? (body.images[0] ?? null) as any : undefined,
         traits: traits === undefined ? undefined : traits,
       },
     } as any);
     if (!updated.count) return reply.code(404).send({ error: 'Not found' });
+    // Best-effort: update images JSON column if present
+    if (body.images !== undefined) {
+      try {
+        await (prisma as any).character.update({ where: { id: params.charId }, data: { images: body.images } } as any);
+      } catch {}
+    }
     const result = await (prisma as any).character.findFirst({ where: { id: params.charId, projectId: project.id }, select: { id: true, name: true, role: true, summary: true, traits: true, imageUrl: true, updatedAt: true } });
-    return reply.send(result);
+    const withImages = { ...(result as any), images: ((result as any)?.images ?? (((result as any)?.imageUrl) ? [(result as any).imageUrl] : [])) };
+    return reply.send(withImages);
   });
 
   app.delete('/project/:id/characters/:charId', async (req, reply) => {

@@ -52,7 +52,7 @@ export function createApi(supabase: SupabaseClient) {
     // Project settings
     updateProjectSettings: (
       id: string,
-      body: { genre?: string; worldName?: string; coreConflict?: string; settingsJson?: any; mode?: 'novel' | 'manhwa' | 'convert' }
+      body: { title?: string; description?: string; coverImage?: string; genre?: string; coreConflict?: string; settingsJson?: any; mode?: 'novel' | 'manhwa' | 'convert' }
     ) => apiFetch<any>(supabase, `/api/project/${id}/settings`, { method: 'PATCH', body: JSON.stringify(body) }),
 
     // Chat
@@ -107,12 +107,12 @@ export function createApi(supabase: SupabaseClient) {
       apiFetch<any[]>(supabase, `/api/project/${projectId}/characters`),
     createCharacter: (
       projectId: string,
-      body: { name: string; role?: string; summary?: string; imageUrl?: string; traits?: any; traitsOps?: Array<{ op: 'set'|'delete'; path: string[]; value?: any }> }
+      body: { name: string; role?: string; summary?: string; images?: string[]; traits?: any; traitsOps?: Array<{ op: 'set'|'delete'; path: string[]; value?: any }> }
     ) => apiFetch<any>(supabase, `/api/project/${projectId}/characters`, { method: 'POST', body: JSON.stringify(body) }),
     updateCharacter: (
       projectId: string,
       charId: string,
-      body: { name?: string; role?: string; summary?: string; imageUrl?: string | null; traits?: any; traitsOps?: Array<{ op: 'set'|'delete'; path: string[]; value?: any }> }
+      body: { name?: string; role?: string; summary?: string; images?: string[]; traits?: any; traitsOps?: Array<{ op: 'set'|'delete'; path: string[]; value?: any }> }
     ) => apiFetch<any>(supabase, `/api/project/${projectId}/characters/${charId}`, { method: 'PATCH', body: JSON.stringify(body) }),
     deleteCharacter: (
       projectId: string,

@@ -10,6 +10,7 @@ type CharacterItem = {
   name: string;
   role?: string | null;
   summary?: string | null;
+  images?: string[] | null;
   imageUrl?: string | null;
   traits?: any | null;
   createdAt?: string;
@@ -68,7 +69,7 @@ export function CharacterManager({ projectId, requireImage }: { projectId: strin
   const [toast, setToast] = useState("");
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [form, setForm] = useState<CharacterItem>({ name: "" });
+  const [form, setForm] = useState<CharacterItem>({ name: "", images: [] });
   const [traits, setTraits] = useState<any>({});
   const [uploading, setUploading] = useState(false);
   const dropRef = useRef<HTMLDivElement | null>(null);
@@ -155,7 +156,7 @@ export function CharacterManager({ projectId, requireImage }: { projectId: strin
         return [...prev, item];
       });
       if (activeId === item.id) {
-        setForm({ id: item.id, name: item.name, role: item.role || "", summary: item.summary || "", imageUrl: (item as any).imageUrl || "", traits: item.traits || null });
+        setForm({ id: item.id, name: item.name, role: item.role || "", summary: item.summary || "", images: (item as any).images ?? ((item as any).imageUrl ? [(item as any).imageUrl] : []), traits: item.traits || null });
         setTraits(item.traits || {});
       }
       notify("Character updated via chat");
@@ -167,13 +168,13 @@ export function CharacterManager({ projectId, requireImage }: { projectId: strin
   useEffect(() => {
     if (!activeId) return;
     if (activeId === "__new__") {
-      setForm({ name: "" });
+      setForm({ name: "", images: [] });
       setTraits({});
       return;
     }
     const it = items.find((x) => x.id === activeId);
     if (!it) return;
-    setForm({ id: it.id, name: it.name, role: it.role || "", summary: it.summary || "", imageUrl: it.imageUrl || "", traits: it.traits || null });
+    setForm({ id: it.id, name: it.name, role: it.role || "", summary: it.summary || "", images: (it as any).images ?? (it.imageUrl ? [it.imageUrl] : []), traits: it.traits || null });
     setTraits(it.traits || {});
   }, [activeId, items]);
 
@@ -185,7 +186,7 @@ export function CharacterManager({ projectId, requireImage }: { projectId: strin
 
   const onNew = () => {
     setActiveId("__new__");
-    setForm({ name: "" });
+    setForm({ name: "", images: [] });
     setTraits({});
   };
 
@@ -208,7 +209,7 @@ export function CharacterManager({ projectId, requireImage }: { projectId: strin
       if (upErr) throw upErr;
       const { data } = supabase.storage.from(bucket).getPublicUrl(path);
       const url = data.publicUrl;
-      setForm((f) => ({ ...f, imageUrl: url }));
+      setForm((f) => ({ ...f, images: [url] }));
       notify("Image uploaded");
     } catch (e: any) {
       notify(e?.message || "Upload failed");
@@ -340,7 +341,7 @@ export function CharacterManager({ projectId, requireImage }: { projectId: strin
       notify("Name is required");
       return;
     }
-    if (requireImage && !form.imageUrl) {
+    if (requireImage && !(Array.isArray(form.images) && form.images.length > 0)) {
       notify("Image is required in manhwa mode");
       return;
     }
@@ -348,11 +349,11 @@ export function CharacterManager({ projectId, requireImage }: { projectId: strin
     try {
       const traitsObj = traits;
       if (activeId === "__new__") {
-        const res = await api.createCharacter(projectId, { name: form.name.trim(), role: form.role || undefined, summary: form.summary || undefined, imageUrl: form.imageUrl || undefined, traits: traitsObj });
+        const res = await api.createCharacter(projectId, { name: form.name.trim(), role: form.role || undefined, summary: form.summary || undefined, images: Array.isArray(form.images) ? form.images : undefined, traits: traitsObj });
         setItems((prev) => [...prev, res]);
         setActiveId(res.id);
       } else if (activeId) {
-        const res = await api.updateCharacter(projectId, activeId, { name: form.name.trim(), role: form.role || undefined, summary: form.summary || undefined, imageUrl: form.imageUrl || undefined, traits: traitsObj });
+        const res = await api.updateCharacter(projectId, activeId, { name: form.name.trim(), role: form.role || undefined, summary: form.summary || undefined, images: Array.isArray(form.images) ? form.images : undefined, traits: traitsObj });
         setItems((prev) => prev.map((x) => (x.id === res.id ? res : x)));
       }
       notify("Saved");
@@ -371,7 +372,7 @@ export function CharacterManager({ projectId, requireImage }: { projectId: strin
       await api.deleteCharacter(projectId, activeId);
       setItems((prev) => prev.filter((x) => x.id !== activeId));
       setActiveId(null);
-      setForm({ name: "" });
+      setForm({ name: "", images: [] });
       setTraits({});
       notify("Deleted");
     } catch (e: any) {
@@ -417,7 +418,11 @@ export function CharacterManager({ projectId, requireImage }: { projectId: strin
               <button key={c.id} onClick={() => setActiveId(c.id!)} className={classNames("w-full text-left px-3 py-3 rounded-md mb-2 transition-all", activeId===c.id ? "border-l-2 border-blue-500 bg-bg-elevated" : "hover:bg-bg-hover") }>
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 rounded-full bg-bg-primary border border-border-default overflow-hidden flex items-center justify-center">
-                    {c.imageUrl ? <img src={c.imageUrl} alt={c.name} className="w-full h-full object-cover" /> : <div className="text-xs text-text-tertiary">No Img</div>}
+                    {(((c as any).images?.[0]) || c.imageUrl) ? (
+                      <img src={(((c as any).images?.[0]) || c.imageUrl) as string} alt={c.name} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="text-xs text-text-tertiary">No Img</div>
+                    )}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-text-primary truncate">{c.name}</div>
@@ -434,16 +439,16 @@ export function CharacterManager({ projectId, requireImage }: { projectId: strin
             <div className="max-w-2xl mx-auto">
               <div ref={dropRef} className="flex flex-col items-center mb-6 p-4 rounded-xl border border-border-default bg-bg-elevated">
                 <div className="w-30 h-30 w-[120px] h-[120px] rounded-full overflow-hidden border border-border-default bg-bg-primary flex items-center justify-center">
-                  {form.imageUrl ? <img src={form.imageUrl} alt="avatar" className="w-full h-full object-cover" /> : <div className="text-xs text-text-tertiary">No Image</div>}
+                  {(form.images?.[0]) ? <img src={form.images[0]} alt="avatar" className="w-full h-full object-cover" /> : <div className="text-xs text-text-tertiary">No Image</div>}
                 </div>
                 <div className="mt-3 flex items-center gap-2">
                   <label className="px-3 py-2 rounded-md border border-border-default bg-bg-primary text-text-secondary hover:text-text-primary inline-flex items-center gap-2 cursor-pointer">
                     <Upload className="w-4 h-4" />
-                    {form.imageUrl ? "Change Image" : "Upload Image"}
+                    {(form.images?.[0]) ? "Change Image" : "Upload Image"}
                     <input type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void onUploadFile(f); }} />
                   </label>
-                  {form.imageUrl && (
-                    <button onClick={() => setForm((f)=>({ ...f, imageUrl: "" }))} className="text-text-tertiary hover:text-red-400 text-sm inline-flex items-center gap-1">
+                  {(form.images && form.images.length > 0) && (
+                    <button onClick={() => setForm((f)=>({ ...f, images: [] }))} className="text-text-tertiary hover:text-red-400 text-sm inline-flex items-center gap-1">
                       <X className="w-4 h-4" />
                       Remove
                     </button>

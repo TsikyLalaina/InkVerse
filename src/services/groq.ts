@@ -17,10 +17,18 @@ export async function loadProjectSettings(projectId: string) {
     } as any,
   } as any);
 
-  const characters = await (prisma as any).character.findMany({
-    where: { projectId },
-    select: { id: true, name: true, role: true, summary: true, traits: true, imageUrl: true },
-  } as any);
+  let characters: any[] = [];
+  try {
+    characters = await (prisma as any).character.findMany({
+      where: { projectId },
+      select: { id: true, name: true, role: true, summary: true, traits: true, imageUrl: true, images: true },
+    } as any);
+  } catch {
+    characters = await (prisma as any).character.findMany({
+      where: { projectId },
+      select: { id: true, name: true, role: true, summary: true, traits: true, imageUrl: true },
+    } as any);
+  }
 
   const world = await (prisma as any).worldSetting.findMany({
     where: { projectId },
@@ -62,6 +70,10 @@ function buildActionPolicy() {
     '- Avoid proposing non-plot settings or worldbuilding changes. Use characters and world notes only as continuity/context.',
     '- Do NOT discuss conversions or modes other than writing/revising chapters.',
     '',
+    'Global JSON rules:',
+    '- All arrays MUST be arrays of strings; never arrays of objects.',
+    '- For collections that would be arrays of objects (e.g., name + description), use an object map of name -> string instead.',
+    '',
     'Modes:',
     '- [MODE chat]: brainstorm, outline, critique. Prefer concise bullets; avoid long narrative unless asked.',
     '- [MODE action]: produce final chapter text or specific edits as requested.',
@@ -82,6 +94,12 @@ function buildActionPolicy() {
     '',
     'Settings scope (plot-only):',
     '- If asked to adjust settings, limit to genre or coreConflict. Do not introduce worldName or unrelated keys.',
+    '',
+    'Scope enforcement (hard rules):',
+    '- Never modify or refine character or world settings in Plot chat.',
+    '- Never produce character JSON, world JSON, or propose character/world record updates.',
+    '- If the user asks for character/world refinement or settings changes, refuse and respond with a warning: "Warning: This is a Plot chat. Character/World changes are forbidden here. Open the appropriate chat type (Character/World) to proceed. I can discuss plot implications only."',
+    '- When refusing, optionally provide plot-only implications or questions, but no cross-domain edits.',
   ].join('\n');
 }
 
@@ -105,18 +123,18 @@ export async function buildSystemPromptForChat(
   const settings = buildSettingsBlock(ctx);
   const buildCharactersJsonBlock = () => {
     const arr = (ctx.characters || []).map((c: any) => ({
-      id: c.id,
+      // id intentionally omitted to avoid leaking internal identifiers
       name: c.name,
       role: c.role ?? null,
       summary: c.summary ?? null,
       traits: c.traits ?? null,
-      imageUrl: (c as any).imageUrl ?? null,
+      images: (c as any).images ?? (((c as any).imageUrl) ? [ (c as any).imageUrl ] : null),
     }));
     return arr.length ? `[CHARACTERS JSON]\n${JSON.stringify(arr).slice(0, 200000)}` : '';
   };
   const buildWorldJsonBlock = () => {
     const arr = (ctx.world || []).map((w: any) => ({
-      id: w.id,
+      // id intentionally omitted to avoid leaking internal identifiers
       name: w.name,
       summary: w.summary ?? null,
       traits: w.traits ?? null,
@@ -131,6 +149,16 @@ export async function buildSystemPromptForChat(
       '- Use world notes and other characters only as context for consistency.',
       '- Modes: [MODE chat] brainstorm/outline; [MODE action] produce finalized character fields.',
       '- Output should be succinct and oriented toward updating character records.',
+      '- Never reveal internal database IDs or raw DB JSON in responses.',
+      '',
+      'JSON structuring rules:',
+      '- All arrays MUST be arrays of strings; never arrays of objects.',
+      '- For collections with names and descriptions (e.g., skills, abilities), use an object map of name -> string instead of an array of objects.',
+      '',
+      'Scope enforcement (hard rules):',
+      '- Never create or modify chapters or project plot settings in Character chat.',
+      '- Never produce world entry JSON or propose world record updates.',
+      '- If the user asks for chapter work, plot settings, or world changes, refuse and respond with a warning: "Warning: This is a Character chat. Chapter/Plot/World changes are forbidden here. Open the appropriate chat type (Plot/World) to proceed. I can discuss character ramifications only."',
     ].join('\n');
     const guidance = [
       'Chat guidance:',
@@ -146,6 +174,16 @@ export async function buildSystemPromptForChat(
       '- Focus on world notes: regions, factions, rules, technology/magic, aesthetics. Keep entries concise and structured.',
       '- Use characters and chapters only as context for consistency.',
       '- Modes: [MODE chat] brainstorm/outline; [MODE action] produce finalized world entry fields.',
+      '- Never reveal internal database IDs or raw DB JSON in responses.',
+      '',
+      'JSON structuring rules:',
+      '- All arrays MUST be arrays of strings; never arrays of objects.',
+      '- For collections with names and descriptions (e.g., abilities, factions), use an object map of name -> string instead of an array of objects.',
+      '',
+      'Scope enforcement (hard rules):',
+      '- Never create or modify chapters or project plot settings in World chat.',
+      '- Never produce character JSON or propose character record updates.',
+      '- If the user asks for chapter work, plot settings, or character changes, refuse and respond with a warning: "Warning: This is a World chat. Chapter/Plot/Character changes are forbidden here. Open the appropriate chat type (Plot/Character) to proceed. I can discuss world ramifications only."',
     ].join('\n');
     const guidance = [
       'Chat guidance:',

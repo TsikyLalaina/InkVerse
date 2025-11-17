@@ -117,11 +117,48 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
         const t = v.trim();
         return t.length ? t : undefined;
       };
+      // Extract the first top-level JSON object from the user's message (balanced braces, string-aware)
+      const extractFirstJsonObject = (text: string): any | null => {
+        try {
+          const s = String(text || '');
+          for (let i = 0; i < s.length; i++) {
+            if (s[i] === '{') {
+              let depth = 1;
+              let inStr = false;
+              let esc = false;
+              for (let j = i + 1; j < s.length; j++) {
+                const ch = s[j];
+                if (inStr) {
+                  if (!esc && ch === '"') inStr = false;
+                  esc = ch === '\\' && !esc;
+                } else {
+                  if (ch === '"') inStr = true;
+                  else if (ch === '{') depth++;
+                  else if (ch === '}') {
+                    depth--;
+                    if (depth === 0) {
+                      const slice = s.slice(i, j + 1);
+                      try {
+                        const parsed = JSON.parse(slice);
+                        if (parsed && typeof parsed === 'object') return parsed;
+                      } catch {}
+                      break;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } catch {}
+        return null;
+      };
       const deriveCharacterFromConversation = async (): Promise<{ name?: string; role?: string; summary?: string; traits?: any } | null> => {
         const sys = [
           'You are a helper that writes ONLY strict JSON for a Character object.',
           'Return ONLY a single JSON object with optional keys: { name, role, summary, traits }',
           'If the user indicates to "save", "apply", "commit", or "update" (synonyms), include ALL fields from the most recent assistant proposal, especially include full traits JSON. Do not omit traits.',
+          'If the user does NOT indicate save/apply/commit/update, return an empty object: {}.',
+          'Global JSON rules: All arrays MUST be arrays of strings; never arrays of objects. If you would produce an array of objects (e.g., name + description), use an object map of name -> string instead.',
           'Merge any explicit new values from the user with the last assistant proposal; prefer explicit user changes.',
           'No prose, no code fences.',
         ].join('\n');
@@ -142,6 +179,10 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
           'You are a helper that writes ONLY strict JSON for a World entry.',
           'Return ONLY a single JSON object with optional keys: { name, summary, traits }',
           'If the user indicates to "save", "apply", "commit", or "update" (synonyms), include ALL fields from the most recent assistant proposal, especially include full traits JSON. Do not omit traits.',
+          'If the user does NOT indicate save/apply/commit/update, return an empty object: {}.',
+          'Global JSON rules: All arrays MUST be arrays of strings; never arrays of objects. If you would produce an array of objects (e.g., name + description), use an object map of name -> string instead.',
+          'Classification: Mechanics like magic, power, or energy systems belong to world traits. Do NOT treat these as project-level plot settings.',
+          'Preserve complete descriptions verbatim. Do not summarize unless explicitly asked to summarize.',
           'Merge any explicit new values from the user with the last assistant proposal; prefer explicit user changes.',
           'No prose, no code fences.',
         ].join('\n');
@@ -158,24 +199,42 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
         try { const parsed = JSON.parse(resp?.choices?.[0]?.message?.content || '{}'); return parsed && typeof parsed === 'object' ? parsed : null; } catch { return null; }
       };
 
-      // Early handle character/world chats: derive + upsert or preview
-      if (chatType === 'character') {
+      // Early handle character/world chats: derive + upsert or preview, only when user asks to save/apply/commit/update
+      const _raw = body.message.trim();
+      const _lower = _raw.toLowerCase();
+      const wantsEntitySave = /(save|apply|commit|update)\b/.test(_lower);
+      if (chatType === 'character' && wantsEntitySave) {
         const draft = await deriveCharacterFromConversation();
         if (draft && (draft.name || draft.summary || draft.role || draft.traits)) {
           if (clientMode === 'action') {
             // Upsert by name (case-insensitive)
-            const name = (draft.name || mentions.title || '').trim();
+            const fromUser = extractFirstJsonObject(body.message);
+            const traitsFromUser = (fromUser && typeof fromUser === 'object')
+              ? (isObj((fromUser as any).traits)
+                  ? (fromUser as any).traits
+                  : (Array.isArray(fromUser)
+                      ? null
+                      : (!('id' in (fromUser as any) || 'name' in (fromUser as any) || 'role' in (fromUser as any) || 'summary' in (fromUser as any) || 'imageUrl' in (fromUser as any))
+                          ? fromUser
+                          : null)))
+              : null;
+            const nameFromUser = typeof (fromUser as any)?.name === 'string' ? (fromUser as any).name : undefined;
+            const summaryFromUser = typeof (fromUser as any)?.summary === 'string' ? (fromUser as any).summary : undefined;
+            const name = (draft.name || nameFromUser || mentions.title || '').trim();
             let saved: any = null;
             if (name) {
               const existing = await (prisma as any).character.findFirst({ where: { projectId: projectIdStr, name: { equals: name, mode: 'insensitive' } }, select: { id: true, traits: true } } as any);
               if (existing) {
-                const mergedTraits = isObj(draft.traits) ? deepMerge((existing as any).traits || {}, draft.traits) : undefined;
+                const step1 = isObj((existing as any).traits) && isObj(draft.traits)
+                  ? deepMerge((existing as any).traits, draft.traits)
+                  : (isObj((existing as any).traits) ? (existing as any).traits : (isObj(draft.traits) ? draft.traits : undefined));
+                const mergedTraits = isObj(traitsFromUser) ? deepMerge(step1 || {}, traitsFromUser) : step1;
                 saved = await (prisma as any).character.update({
                   where: { id: (existing as any).id },
                   data: {
                     name: name || undefined,
                     role: cleanStr(draft.role),
-                    summary: cleanStr(draft.summary),
+                    summary: cleanStr(draft.summary) ?? cleanStr(summaryFromUser) ?? undefined,
                     traits: mergedTraits,
                   },
                 } as any);
@@ -185,16 +244,25 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
                     projectId: projectIdStr,
                     name: name || 'Unnamed',
                     role: cleanStr(draft.role) ?? null,
-                    summary: cleanStr(draft.summary) ?? null,
-                    traits: isObj(draft.traits) ? draft.traits : null,
+                    summary: cleanStr(draft.summary) ?? cleanStr(summaryFromUser) ?? null,
+                    traits: ((): any => {
+                      let acc: any = {};
+                      if (isObj(draft.traits)) acc = deepMerge(acc, draft.traits);
+                      if (isObj(traitsFromUser)) acc = deepMerge(acc, traitsFromUser);
+                      return Object.keys(acc).length ? acc : null;
+                    })(),
                   },
                 } as any);
               }
               send({ action: 'upsert_character', item: { id: saved.id, name: saved.name, role: saved.role, summary: saved.summary, traits: saved.traits } });
               await persistAssistant(`Character updated: ${saved.name}${saved.role ? ` (${saved.role})` : ''}.`);
             } else {
-              send({ type: 'text', content: 'Character name is missing. Provide a name or include it in quotes like @"Name".' });
-              await persistAssistant('Character name is missing. Provide a name or include it in quotes like @"Name".');
+              const hasJson = Boolean(extractFirstJsonObject(body.message));
+              const msg = hasJson
+                ? 'I detected character trait JSON. Which character should I apply this to? Mention @"Name".'
+                : 'Character name is missing. Provide a name or include it in quotes like @"Name".';
+              send({ type: 'text', content: msg });
+              await persistAssistant(msg);
             }
           } else {
             const preview = Object.entries(draft).map(([k,v]) => `- ${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`).join('\n');
@@ -206,21 +274,69 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
           return reply;
         }
       }
-      if (chatType === 'world') {
+      // If user pasted JSON in Character chat but didn't specify a target, prompt for it (non-save intent)
+      if (chatType === 'character' && !wantsEntitySave) {
+        const fromUser = extractFirstJsonObject(body.message);
+        const hasNameMention = Boolean(mentions.title) || /@\"([^\"]+)\"/.test(String(body.message));
+        if (isObj(fromUser) && !hasNameMention) {
+          const msg = 'Detected character traits JSON. Which character should I apply this to? Mention @"Name". Switch to Action mode to apply.';
+          send({ type: 'text', content: msg });
+          await persistAssistant(msg);
+          send({ type: 'done' });
+          reply.raw.end();
+          return reply;
+        }
+      }
+      // If user pasted JSON in World chat but didn't specify a target, prompt for it (non-save intent)
+      if (chatType === 'world' && !wantsEntitySave) {
+        const fromUser = extractFirstJsonObject(body.message);
+        const hasNameMention = Boolean(mentions.title) || /@\"([^\"]+)\"/.test(String(body.message));
+        if (isObj(fromUser) && !hasNameMention) {
+          const msg = 'Detected world traits JSON. Which world should I apply this to? Mention @"Name". Switch to Action mode to apply.';
+          send({ type: 'text', content: msg });
+          await persistAssistant(msg);
+          send({ type: 'done' });
+          reply.raw.end();
+          return reply;
+        }
+      }
+      if (chatType === 'world' && wantsEntitySave) {
         const draft = await deriveWorldFromConversation();
         if (draft && (draft.name || draft.summary || draft.traits)) {
           if (clientMode === 'action') {
-            const name = (draft.name || mentions.title || '').trim();
+            const fromUser = extractFirstJsonObject(body.message);
+            const traitsFromUser = (fromUser && typeof fromUser === 'object')
+              ? (isObj((fromUser as any).traits)
+                  ? (fromUser as any).traits
+                  : (Array.isArray(fromUser)
+                      ? null
+                      : (!('id' in (fromUser as any) || 'name' in (fromUser as any) || 'summary' in (fromUser as any) || 'images' in (fromUser as any))
+                          ? fromUser
+                          : null)))
+              : null;
+            const nameFromUser = typeof (fromUser as any)?.name === 'string' ? (fromUser as any).name : undefined;
+            const summaryFromUser = typeof (fromUser as any)?.summary === 'string' ? (fromUser as any).summary : undefined;
+            let name = (draft.name || nameFromUser || mentions.title || '').trim();
+            if (!name) {
+              const rawMsg = String((body as any).message || '');
+              const m1 = /\b([A-Z][A-Za-z0-9_\-]{2,})\s+world\b/.exec(rawMsg);
+              const m2 = /\bworld\s+(?:named|called|of)\s+([A-Z][A-Za-z0-9_\-]{2,})\b/.exec(rawMsg);
+              const m3 = /\bthe\s+([A-Z][A-Za-z0-9_\-]{2,})\s+world\b/.exec(rawMsg);
+              name = (m1?.[1] || m2?.[1] || m3?.[1] || '').trim();
+            }
             let saved: any = null;
             if (name) {
               const existing = await (prisma as any).worldSetting.findFirst({ where: { projectId: projectIdStr, name: { equals: name, mode: 'insensitive' } }, select: { id: true, traits: true } } as any);
               if (existing) {
-                const mergedTraits = isObj(draft.traits) ? deepMerge((existing as any).traits || {}, draft.traits) : undefined;
+                const step1 = isObj((existing as any).traits) && isObj(draft.traits)
+                  ? deepMerge((existing as any).traits, draft.traits)
+                  : (isObj((existing as any).traits) ? (existing as any).traits : (isObj(draft.traits) ? draft.traits : undefined));
+                const mergedTraits = isObj(traitsFromUser) ? deepMerge(step1 || {}, traitsFromUser) : step1;
                 saved = await (prisma as any).worldSetting.update({
                   where: { id: (existing as any).id },
                   data: {
                     name: name || undefined,
-                    summary: cleanStr(draft.summary),
+                    summary: cleanStr(draft.summary) ?? cleanStr(summaryFromUser) ?? undefined,
                     traits: mergedTraits,
                   },
                 } as any);
@@ -229,16 +345,25 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
                   data: {
                     projectId: projectIdStr,
                     name: name || 'Untitled',
-                    summary: cleanStr(draft.summary) ?? null,
-                    traits: isObj(draft.traits) ? draft.traits : null,
+                    summary: cleanStr(draft.summary) ?? cleanStr(summaryFromUser) ?? null,
+                    traits: ((): any => {
+                      let acc: any = {};
+                      if (isObj(draft.traits)) acc = deepMerge(acc, draft.traits);
+                      if (isObj(traitsFromUser)) acc = deepMerge(acc, traitsFromUser);
+                      return Object.keys(acc).length ? acc : null;
+                    })(),
                   },
                 } as any);
               }
               send({ action: 'upsert_world', item: { id: saved.id, name: saved.name, summary: saved.summary, traits: saved.traits } });
               await persistAssistant(`World entry updated: ${saved.name}.`);
             } else {
-              send({ type: 'text', content: 'World entry name is missing. Provide a name or include it in quotes like @"Name".' });
-              await persistAssistant('World entry name is missing. Provide a name or include it in quotes like @"Name".');
+              const hasJson = Boolean(extractFirstJsonObject(body.message));
+              const msg = hasJson
+                ? 'I detected world traits JSON. Which world should I apply this to? Mention @"Name".'
+                : 'World entry name is missing. Provide a name or include it in quotes like @"Name".';
+              send({ type: 'text', content: msg });
+              await persistAssistant(msg);
             }
           } else {
             const preview = Object.entries(draft).map(([k,v]) => `- ${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`).join('\n');
@@ -260,10 +385,13 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
           'CRITICAL: Derive from BOTH the latest assistant response AND the recent chat transcript provided.',
           'Aggregate details across the whole window; ONLY prefer newer details when they conflict with older ones.',
           'Do not ask the user for JSON. Do not invent entities; omit unknowns.',
+          'Global JSON rules: All arrays MUST be arrays of strings; never arrays of objects. If you would produce an array of objects (e.g., name + description), use an object map of name -> string instead.',
           'Schema (flexible):',
-          '- Top-level keys (optional): "genre", "worldName", "coreConflict", "title", "settingsJson".',
-          '- Put ALL additional information under "settingsJson" using nested objects/arrays as needed.',
-          '- Examples inside settingsJson can include: "characters", "regions", "cities", "plot", "themes", "magicSystem", "technology".',
+          '- Top-level keys (optional): "title", "description", "coverImage", "mode", "genre", "coreConflict", "settingsJson".',
+          '- Put ALL other information under "settingsJson" using nested objects and arrays of strings only.',
+          '- Plot-only scope: settingsJson MUST contain only plot-related structure such as: "plot", "beats", "acts", "actStructure", "outline", "themes", "tone", "logline", "summary", "notes", "arcs", "conflicts", "pace", "style", "setting", "characterDevelopment".',
+          '- Allowed shapes for these keys: tone/themes/style/pace as array of short strings; plot as array of short strings or nested objects where any arrays are arrays of strings only; conflicts as object { internal, external, interpersonal } strings; setting as short descriptive string(s), not lists of world entities; characterDevelopment as short descriptive string.',
+          '- ABSOLUTE FORBIDDANCE: Do NOT include character- or world-specific data in any form. Do NOT create keys like: "characters", "character", "cast", "world", "worlds", "regions", "cities", "locations", "factions", "species", "races", "images", "traits", "technology", "magicSystem", "geography".',
         ].join('\n');
 
         // Prefer the latest full assistant content (skip placeholders like [chapter draft ready])
@@ -318,14 +446,30 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
           // worldName removed from Project; ignore any proposed world name at project level
           if (typeof proposed?.coreConflict === 'string') changes.coreConflict = proposed.coreConflict;
           if (typeof proposed?.title === 'string') changes.title = proposed.title;
+          if (typeof proposed?.description === 'string') changes.description = proposed.description;
+          if (typeof proposed?.coverImage === 'string') changes.coverImage = proposed.coverImage;
+          if (typeof proposed?.mode === 'string' && ['novel','manhwa'].includes(proposed.mode)) changes.mode = proposed.mode;
           if (proposed?.settingsJson && typeof proposed.settingsJson === 'object') changes.settingsJson = proposed.settingsJson;
           if (!changes.settingsJson && proposed?.settings && typeof proposed.settings === 'object') changes.settingsJson = proposed.settings;
-          const reserved = new Set(['genre','worldName','world','coreConflict','title','settingsJson','settings','mode']);
+          const reserved = new Set(['genre','worldName','world','coreConflict','title','description','coverImage','settingsJson','settings','mode']);
           for (const k of Object.keys(proposed || {})) {
             if (!reserved.has(k)) {
               (changes.settingsJson ||= {});
               (changes.settingsJson as any)[k] = (proposed as any)[k];
             }
+          }
+          // Sanitize for plot-only chats: drop character/world-like keys from settingsJson
+          if (chatType !== 'plot') {
+            // Non-plot chats should not update project settings at all
+            return null;
+          }
+          if (changes.settingsJson && typeof changes.settingsJson === 'object') {
+            const allowedPlotKeys = new Set(['plot','beats','acts','actStructure','outline','themes','tone','logline','summary','notes','arcs','conflicts','pace','style','setting','characterDevelopment']);
+            const sj = changes.settingsJson as Record<string, any>;
+            for (const key of Object.keys(sj)) {
+              if (!allowedPlotKeys.has(key)) delete (sj as any)[key];
+            }
+            if (Object.keys(changes.settingsJson).length === 0) delete changes.settingsJson;
           }
           return Object.keys(changes).length > 0 ? changes : null;
         };
@@ -497,38 +641,60 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
         const raw = clsResp?.choices?.[0]?.message?.content || '{}';
         let parsed: any = {};
         try { parsed = JSON.parse(raw); } catch {}
+
         const action = String(parsed?.action || 'none');
         const confidence = Number(parsed?.confidence ?? 0);
 
         if (confidence >= 0.6) {
           if (action === 'set_settings') {
-            const changes = await deriveSettingsFromConversation();
-            if (changes) {
-              if (clientMode === 'action') {
-                send({ action: 'confirm_settings', changes });
-                const preview = Object.entries(changes).map(([k,v]) => `- ${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`).join('\n');
-                await persistAssistant(`Proposed settings (confirm to apply):\n${preview}`);
-              } else {
-                const preview = Object.entries(changes).map(([k,v]) => `- ${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`).join('\n');
-                send({ type: 'text', content: `Preview settings (not applied in Chat mode):\n${preview}\n\nSwitch to Action mode to apply.` });
-                await persistAssistant(`Preview settings (not applied in Chat mode):\n${preview}\n\nSwitch to Action mode to apply.`);
+            if (chatType === 'plot') {
+              const changes = await deriveSettingsFromConversation();
+              if (changes) {
+                if (clientMode === 'action') {
+                  send({ action: 'confirm_settings', changes });
+                  const preview = Object.entries(changes).map(([k,v]) => `- ${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`).join('\n');
+                  await persistAssistant(`Proposed settings (confirm to apply):\n${preview}`);
+                } else {
+                  const preview = Object.entries(changes).map(([k,v]) => `- ${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`).join('\n');
+                  send({ type: 'text', content: `Preview settings (not applied in Chat mode):\n${preview}\n\nSwitch to Action mode to apply.` });
+                  await persistAssistant(`Preview settings (not applied in Chat mode):\n${preview}\n\nSwitch to Action mode to apply.`);
+                }
+                send({ type: 'done' });
+                reply.raw.end();
+                return reply;
               }
-              send({ type: 'done' });
-              reply.raw.end();
-              return reply;
+            }
+            // If not plot chat, ignore this classifier result and continue with world/character handling
+          }
+          if (action === 'convert_to_manhwa') {
+            if (chatType === 'plot') {
+              intent = 'convert_to_manhwa';
+              intentArgs = {};
+            } else {
+              const msg = 'Warning: This is a ' + chatType + ' chat. Chapter/panel work is forbidden here. Open a Plot chat to proceed.';
+              send({ type: 'text', content: msg });
+              await persistAssistant(msg);
+            }
+          }
+          if (action === 'update_chapter') {
+            if (chatType === 'plot') {
+              intent = 'update_chapter';
+              intentArgs = {};
+            } else {
+              const msg = 'Warning: This is a ' + chatType + ' chat. Chapter edits are forbidden here. Open a Plot chat to proceed.';
+              send({ type: 'text', content: msg });
+              await persistAssistant(msg);
             }
           }
           if (action === 'create_chapter') {
-            intent = 'create_chapter';
-            intentArgs = {};
-          }
-          if (action === 'convert_to_manhwa') {
-            intent = 'convert_to_manhwa';
-            intentArgs = {};
-          }
-          if (action === 'update_chapter') {
-            intent = 'update_chapter';
-            intentArgs = {};
+            if (chatType === 'plot') {
+              intent = 'create_chapter';
+              intentArgs = {};
+            } else {
+              const msg = 'Warning: This is a ' + chatType + ' chat. Chapter creation is forbidden here. Open a Plot chat to proceed.';
+              send({ type: 'text', content: msg });
+              await persistAssistant(msg);
+            }
           }
         }
       } catch {}
@@ -539,6 +705,14 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
         const lower = raw.toLowerCase();
         const wantsSaveDraft = /(save|persist|apply|commit)\b/.test(lower) && /(chapter|draft|scene|it|this)\b/.test(lower);
         if (wantsSaveDraft) {
+          if (chatType !== 'plot') {
+            const msg = 'Warning: This is a ' + chatType + ' chat. Saving chapters is forbidden here. Open a Plot chat to proceed.';
+            send({ type: 'text', content: msg });
+            await persistAssistant(msg);
+            send({ type: 'done' });
+            reply.raw.end();
+            return reply;
+          }
           const draft = await getLastAssistantDraft(params.chatId);
           if (!draft) {
             if (((body as any).clientMode === 'action')) {

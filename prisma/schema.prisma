@@ -113,6 +113,7 @@ model Character {
   role        String?  @db.Text
   summary     String?  @db.Text
   imageUrl    String?  @map("image_url") @db.Text
+  images      Json?    @db.Json
   traits      Json?    @db.Json
   createdAt   DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime? @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)

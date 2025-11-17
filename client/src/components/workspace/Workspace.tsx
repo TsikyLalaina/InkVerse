@@ -151,6 +151,8 @@ export function Workspace({ projectId }: { projectId: string }) {
     const onSettings = (e: any) => {
       const detail = e?.detail || {};
       const changes = detail.changes || {};
+      if (changes.title !== undefined) setProjectTitle(changes.title || '');
+      if (changes.description !== undefined) setProjectDescription(changes.description || '');
       if (changes.mode) setProjMode(changes.mode);
       if (changes.genre !== undefined) setProjGenre(changes.genre || '');
       if (changes.coreConflict !== undefined) setProjCoreConflict(changes.coreConflict || '');
@@ -247,6 +249,15 @@ export function Workspace({ projectId }: { projectId: string }) {
     })();
     return () => { mounted = false; };
   }, [api, projectId]);
+
+  // Initialize Project Settings form fields when the tab opens or project fields hydrate
+  useEffect(() => {
+    if (activeId === SETTINGS_TAB_ID) {
+      if (!renameTitle && projectTitle) setRenameTitle(projectTitle);
+      if (!renameDesc && (projectDescription !== undefined)) setRenameDesc(projectDescription);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, projectTitle, projectDescription]);
 
   // Load chats (hydrate from cache first, then revalidate)
   useEffect(() => {
@@ -792,7 +803,11 @@ export function Workspace({ projectId }: { projectId: string }) {
           {/* Chat view fills the sidebar */}
           <div className="min-h-0 flex-1 overflow-hidden border-t border-border-default">
             {activeChatId ? (
-              <Chat chatId={activeChatId} />
+              <Chat
+                chatId={activeChatId}
+                projectId={projectId}
+                chatType={(chats.find(c => c.id === activeChatId)?.type) || 'plot'}
+              />
             ) : (
               <div className="h-full grid place-items-center text-xs text-text-tertiary">Open the chat menu to create or select a chat.</div>
             )}

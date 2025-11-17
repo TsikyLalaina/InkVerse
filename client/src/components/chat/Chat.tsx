@@ -16,7 +16,7 @@ export type ChatMessage = {
   panelId?: string | null;
 };
 
-export function Chat({ chatId, initialMessages = [] }: { chatId: string; initialMessages?: ChatMessage[] }) {
+export function Chat({ chatId, projectId, chatType = 'plot', initialMessages = [] }: { chatId: string; projectId: string; chatType?: 'plot'|'character'|'world'; initialMessages?: ChatMessage[] }) {
   const supabase = useSupabase();
   const api = useMemo(() => createApi(supabase), [supabase]);
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
@@ -243,33 +243,38 @@ export function Chat({ chatId, initialMessages = [] }: { chatId: string; initial
                 return copy;
               });
             } else if (evt.action === 'create_chapter') {
-              if (typeof window !== 'undefined') {
+              if (chatType !== 'plot') { /* out-of-scope; ignore */ }
+              else if (typeof window !== 'undefined') {
                 window.dispatchEvent(new CustomEvent('workspace:create-draft', { detail: { title: evt.title || 'Untitled Chapter', content: evt.content || '' } }));
               }
             } else if (evt.action === 'confirm_mode' && evt.mode) {
               setPendingMode(evt.mode);
               setMessages((prev) => [...prev, { role: 'assistant', content: `Pending mode change to "${evt.mode}". Confirm?` }]);
             } else if (evt.action === 'confirm_settings' && evt.changes) {
-              if (clientMode === 'action') {
+              if (clientMode === 'action' && chatType === 'plot') {
                 setPendingSettings(evt.changes);
                 setMessages((prev) => [...prev, { role: 'assistant', content: 'Pending settings update detected. Confirm to apply changes.' }]);
               } // ignore in Chat mode for safety
             } else if (evt.type === 'image_job') {
               // Optionally reflect job queued state
             } else if (evt.action === 'convert_to_manhwa') {
-              if (typeof window !== 'undefined') {
+              if (chatType !== 'plot') { /* out-of-scope; ignore */ }
+              else if (typeof window !== 'undefined') {
                 window.dispatchEvent(new CustomEvent('workspace:create-draft', { detail: { title: 'Converted Panels', panel_script: evt.panel_script } }));
               }
             } else if (evt.action === 'update_chapter') {
-              if (typeof window !== 'undefined') {
+              if (chatType !== 'plot') { /* out-of-scope; ignore */ }
+              else if (typeof window !== 'undefined') {
                 window.dispatchEvent(new CustomEvent('workspace:update-chapter', { detail: { id: evt.id, chapter_number: evt.chapter_number, title: evt.title, content: evt.content } }));
               }
             } else if (evt.action === 'upsert_character' && evt.item) {
-              if (typeof window !== 'undefined') {
+              if (chatType !== 'character') { /* out-of-scope; ignore */ }
+              else if (typeof window !== 'undefined') {
                 window.dispatchEvent(new CustomEvent('workspace:character-upsert', { detail: { item: evt.item } }));
               }
             } else if (evt.action === 'upsert_world' && evt.item) {
-              if (typeof window !== 'undefined') {
+              if (chatType !== 'world') { /* out-of-scope; ignore */ }
+              else if (typeof window !== 'undefined') {
                 window.dispatchEvent(new CustomEvent('workspace:world-upsert', { detail: { item: evt.item } }));
               }
             } else if (evt.type === 'error') {
@@ -287,7 +292,7 @@ export function Chat({ chatId, initialMessages = [] }: { chatId: string; initial
       setStreaming(false);
       reader.releaseLock();
     }
-  }, [apiBase, input, chatId, supabase, clientMode]);
+  }, [apiBase, input, chatId, supabase, clientMode, chatType]);
 
   const onRegenerate = useCallback((panelId: string) => {
     void send({ regeneratePanelId: panelId });
@@ -345,17 +350,19 @@ export function Chat({ chatId, initialMessages = [] }: { chatId: string; initial
                   setSaveError(null);
                   try {
                     if (pendingMode) {
-                      // Mode is project-level; Chat component no longer knows projectId here
-                      // This confirm block remains but requires a project-level handler outside
-                      // For safety, we just clear pending and show a note.
-                      // Notify rest of app (e.g., sidebar) to reflect mode immediately
+                      // Persist mode via settings endpoint
+                      await api.updateProjectSettings(projectId, { mode: pendingMode });
                       if (typeof window !== 'undefined') {
                         window.dispatchEvent(new CustomEvent('project:mode-updated', { detail: { mode: pendingMode } }));
                       }
                       setMessages((prev) => [...prev, { role: 'assistant', content: `Mode updated to ${pendingMode}.` }]);
                       setPendingMode(null);
+                      if (toastTimer.current) clearTimeout(toastTimer.current);
+                      setToastMsg('Mode saved');
+                      toastTimer.current = setTimeout(() => setToastMsg(''), 3000);
                     } else if (pendingSettings) {
-                      // Settings are project-level; handle outside. Here we preview-only.
+                      // Persist full settings payload including title/description/coverImage/genre/coreConflict/mode/settingsJson
+                      await api.updateProjectSettings(projectId, pendingSettings);
                       if (typeof window !== 'undefined') {
                         window.dispatchEvent(new CustomEvent('project:settings-updated', { detail: { changes: pendingSettings } }));
                       }
@@ -393,7 +400,7 @@ export function Chat({ chatId, initialMessages = [] }: { chatId: string; initial
                 onChange={(e) => setInput(e.target.value)}
                 placeholder="Chat with Cascade"
                 rows={2}
-                className="w-full bg-bg-elevated border border-border-default rounded-2xl pl-12 pr-12 pt-2 pb-10 text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent resize-none min-h-[80px] max-h-72 overflow-y-auto transition-colors duration-150"
+                className="w-full bg-bg-elevated border border-border-default rounded-2xl pl-12 pr-12 pt-2 pb-16 text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent resize-none min-h-[80px] max-h-72 overflow-y-auto transition-colors duration-150"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
