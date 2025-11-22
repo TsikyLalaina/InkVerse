@@ -16,7 +16,7 @@ A modern AI-assisted writing and manhwa creation suite. Compose chapters with a 
   <a href="https://opensource.org/licenses/ISC"><img alt="License" src="https://img.shields.io/badge/License-ISC-blue"></a>
 </p>
 
-## Overview
+## 📖 Overview
 
 - **Create projects** and write chapters with a focused Plot Muse (SSE streaming via Groq).
 - **Separate chats** per project: Plot, Character, and World modes with scoped behaviors.
@@ -25,7 +25,7 @@ A modern AI-assisted writing and manhwa creation suite. Compose chapters with a 
 - **Supabase Auth** guards all `/api` routes; Postgres via Prisma stores projects, chapters, chats, characters, world, and history.
 - **Reader view** for quick reading sessions of saved chapters.
 
-## Project Structure
+## 🗂️ Project Structure
 
 - **client/** Next.js 14 app (App Router), TailwindCSS, Supabase SSR/Auth, PWA files.
 - **src/** Fastify server (TypeScript), routes, services, middleware, workers.
@@ -51,18 +51,18 @@ InkVerse/
 └─ client/package.json    # Client scripts
 ```
 
-## Tech Stack
+## 🧰 Tech Stack
 
 - **Frontend**: Next.js 14, React 18, TailwindCSS, framer-motion, lucide-react
 - **Backend**: Fastify 5, Zod, Prisma, BullMQ, ioredis
 - **Infra/Services**: Supabase (Auth, Postgres, Storage), Upstash Redis (optional), Groq LLM, Fal.ai images
 - **Lang/Tooling**: TypeScript 5, ts-node, nodemon
 
-## Data Model (Prisma)
+## 🗃️ Data Model (Prisma)
 
 Key tables: `Project`, `Chapter`, `Branch`, `Chat`, `ChatMessage`, `Character`, `WorldSetting`, `SettingHistory`, enum `Mode { novel, manhwa, convert }`.
 
-## API Overview
+## 🔌 API Overview
 
 All API routes are under `/api` and protected by Supabase Auth (Bearer token). Public endpoints: `/health`, `/webhook/fal`.
 
@@ -73,14 +73,14 @@ All API routes are under `/api` and protected by Supabase Auth (Bearer token). P
 - **Chat messages**: `GET /chat/:chatId/messages`, `POST /chat/:chatId` (SSE stream)
 - **Generate**: `POST /generate/text` (SSE stream), `POST /generate/image` (queue or direct Fal)
 
-## Prerequisites
+## ✅ Prerequisites
 
 - Node.js 18+
 - A Supabase project (Auth + Postgres + Storage)
 - Optional: Upstash Redis (for queue + caching)
 - API keys: Groq, Fal
 
-## Environment
+## 🔧 Environment
 
 Create two env files: one at repo root (server) and one in `client/` (frontend).
 
@@ -135,7 +135,7 @@ Notes:
 - The server’s auth middleware validates Bearer tokens via `SUPABASE_URL` and `SUPABASE_ANON_KEY`.
 - For Supabase Postgres, prefer the transaction pooler URL (port 6543) in production.
 
-## Install & Run
+## 🚀 Install & Run
 
 - **1) Install dependencies**
 
@@ -182,7 +182,7 @@ Queue is auto-disabled when `UPSTASH_REDIS_URL` is missing or `DISABLE_QUEUE=tru
 SEED_USER_ID=<uuid> npm run seed
 ```
 
-## Development Notes
+## 🧠 Development Notes
 
 - **SSE streaming**
   - Text: `POST /api/generate/text` streams tokens.
@@ -195,7 +195,7 @@ SEED_USER_ID=<uuid> npm run seed
 - **Storage**
   - Character and World managers upload to Supabase Storage with public URLs. Removal attempts to delete from Storage server-side when possible.
 
-## Scripts
+## 📜 Scripts
 
 - Root (server)
   - `npm run dev` — Fastify with ts-node + nodemon
@@ -210,12 +210,12 @@ SEED_USER_ID=<uuid> npm run seed
   - `npm start` — Next start
   - `npm run lint`
 
-## Security & Keys
+## 🔐 Security & Keys
 
 - Do not commit secrets. Use `.env` and `client/.env.local`.
 - Supabase Service Role Key must remain server-side only.
 
-## License
+## 📄 License
 
 ISC
 
