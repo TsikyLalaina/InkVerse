@@ -14,6 +14,7 @@ export type ChatMessage = {
   role: 'user' | 'assistant';
   content: string;
   panelId?: string | null;
+  imageUrl?: string | null;
 };
 
 export function Chat({ chatId, projectId, chatType = 'plot', initialMessages = [] }: { chatId: string; projectId: string; chatType?: 'plot'|'character'|'world'; initialMessages?: ChatMessage[] }) {
@@ -242,6 +243,17 @@ export function Chat({ chatId, projectId, chatType = 'plot', initialMessages = [
                 copy[assistantIndex] = { ...msg, content: (msg?.content || '') + evt.content };
                 return copy;
               });
+            } else if (evt.type === 'image' && evt.url) {
+              setMessages((prev) => {
+                const copy = [...prev];
+                const current = copy[assistantIndex];
+                if (assistantIndex >= 0 && current && (current.content || '') === '' && !current.imageUrl) {
+                  copy[assistantIndex] = { ...current, imageUrl: evt.url, content: '' } as any;
+                } else {
+                  copy.push({ role: 'assistant', content: '', imageUrl: evt.url } as any);
+                }
+                return copy;
+              });
             } else if (evt.action === 'create_chapter') {
               if (chatType !== 'plot') { /* out-of-scope; ignore */ }
               else if (typeof window !== 'undefined') {
@@ -312,6 +324,7 @@ export function Chat({ chatId, projectId, chatType = 'plot', initialMessages = [
               role={m.role}
               content={m.content}
               panelId={m.panelId}
+              imageUrl={m.imageUrl || undefined}
               onRegenerate={onRegenerate}
               draggable={Boolean(m.panelId)}
             />)

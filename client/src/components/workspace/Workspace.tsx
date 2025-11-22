@@ -63,6 +63,8 @@ export function Workspace({ projectId }: { projectId: string }) {
   const activeTabKey = useMemo(() => `inkverse_project_${projectId}_active_tab`, [projectId]);
   const leftCollapsedKey = useMemo(() => `inkverse_project_${projectId}_left_collapsed`, [projectId]);
   const rightOpenKey = useMemo(() => `inkverse_project_${projectId}_right_open`, [projectId]);
+  const leftWidthKey = useMemo(() => `inkverse_project_${projectId}_left_width`, [projectId]);
+  const rightWidthKey = useMemo(() => `inkverse_project_${projectId}_right_width`, [projectId]);
   const [chats, setChats] = useState<Array<{ id: string; type: 'plot'|'character'|'world'; title: string }>>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [hasChatsCache, setHasChatsCache] = useState<boolean>(false);
@@ -74,6 +76,8 @@ export function Workspace({ projectId }: { projectId: string }) {
   const [createChatError, setCreateChatError] = useState<string | null>(null);
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const [hasChaptersCache, setHasChaptersCache] = useState<boolean>(false);
+  const [leftWidth, setLeftWidth] = useState<number>(260);
+  const [rightWidth, setRightWidth] = useState<number>(260);
 
   // Hydrate chats from localStorage after mount (prevents SSR/client mismatch)
   useEffect(() => {
@@ -113,6 +117,16 @@ export function Workspace({ projectId }: { projectId: string }) {
         if (lc !== null) setLeftCollapsed(lc === '1');
         const ro = window.localStorage.getItem(rightOpenKey);
         if (ro !== null) setRightOpen(ro === '1');
+        const lw = window.localStorage.getItem(leftWidthKey);
+        if (lw) {
+          const n = parseInt(lw, 10);
+          if (!Number.isNaN(n)) setLeftWidth(Math.max(200, Math.min(600, n)));
+        }
+        const rw = window.localStorage.getItem(rightWidthKey);
+        if (rw) {
+          const n = parseInt(rw, 10);
+          if (!Number.isNaN(n)) setRightWidth(Math.max(220, Math.min(600, n)));
+        }
       }
     } catch {}
   }, [chatsCacheKey, chatsActiveKey, chaptersCacheKey, tabsCacheKey, activeTabKey, leftCollapsedKey, rightOpenKey]);
@@ -315,6 +329,12 @@ export function Workspace({ projectId }: { projectId: string }) {
   useEffect(() => {
     try { if (typeof window !== 'undefined') window.localStorage.setItem(rightOpenKey, rightOpen ? '1' : '0'); } catch {}
   }, [rightOpen, rightOpenKey]);
+  useEffect(() => {
+    try { if (typeof window !== 'undefined') window.localStorage.setItem(leftWidthKey, String(leftWidth)); } catch {}
+  }, [leftWidth, leftWidthKey]);
+  useEffect(() => {
+    try { if (typeof window !== 'undefined') window.localStorage.setItem(rightWidthKey, String(rightWidth)); } catch {}
+  }, [rightWidth, rightWidthKey]);
 
   const openTab = useCallback((id: string) => {
     setTabs((prev) => (prev.includes(id) ? prev : [...prev, id]));
@@ -359,6 +379,40 @@ export function Workspace({ projectId }: { projectId: string }) {
       return arr;
     });
   };
+
+  const startLeftResize = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = leftWidth;
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const next = Math.max(200, Math.min(600, startW + dx));
+      setLeftWidth(next);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [leftWidth]);
+
+  const startRightResize = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = rightWidth;
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const next = Math.max(220, Math.min(600, startW - dx));
+      setRightWidth(next);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [rightWidth]);
 
   // Persist edits (debounced)
   const scheduleSave = useCallback((id: string, t: string, c: string) => {
@@ -415,7 +469,13 @@ export function Workspace({ projectId }: { projectId: string }) {
 
   const activeChapter = chapters.find((c) => c.id === activeId) || null;
 
-  const gridCols = `${leftCollapsed ? '' : '260px '}1fr${rightOpen ? ' 260px' : ''}`;
+  const gridCols = useMemo(() => {
+    const cols: string[] = [];
+    if (!leftCollapsed) { cols.push(`${leftWidth}px`); cols.push('4px'); }
+    cols.push('1fr');
+    if (rightOpen) { cols.push('4px'); cols.push(`${rightWidth}px`); }
+    return cols.join(' ');
+  }, [leftCollapsed, rightOpen, leftWidth, rightWidth]);
 
   return (
     <div className="h-screen w-screen bg-bg-primary text-text-primary grid grid-rows-[auto_1fr] relative">
@@ -501,9 +561,8 @@ export function Workspace({ projectId }: { projectId: string }) {
 
       {/* Layout: Left sidebar + Main editor + Right sidebar */}
       <div className="grid min-h-0" style={{ gridTemplateColumns: gridCols }}>
-        {/* Left: Chapter Tree */}
         {!leftCollapsed && (
-        <aside className="border-r border-border-default bg-bg-primary min-h-0 flex flex-col">
+        <aside className="bg-bg-primary min-h-0 flex flex-col">
           <div className="px-5 py-4 text-xs font-semibold tracking-[0.05em] uppercase flex items-center justify-between text-text-secondary">
             <span>CHAPTERS</span>
             <button className="text-text-tertiary hover:text-accent rounded p-1 hover:bg-bg-hover transition-all duration-150" onClick={() => setLeftCollapsed(true)}>
@@ -545,6 +604,15 @@ export function Workspace({ projectId }: { projectId: string }) {
             </button>
           </div>
         </aside>
+        )}
+        {!leftCollapsed && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            onMouseDown={startLeftResize}
+            className="cursor-col-resize w-1 bg-transparent hover:bg-bg-hover"
+            style={{ userSelect: 'none' }}
+          />
         )}
 
         {/* Center: Editor */}
@@ -723,7 +791,16 @@ export function Workspace({ projectId }: { projectId: string }) {
 
         {/* Right: Chats Sidebar */}
         {rightOpen && (
-        <aside className="border-l border-border-default bg-bg-primary min-h-0 flex flex-col relative">
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          onMouseDown={startRightResize}
+          className="cursor-col-resize w-1 bg-transparent hover:bg-bg-hover"
+          style={{ userSelect: 'none' }}
+        />
+        )}
+        {rightOpen && (
+        <aside className="bg-bg-primary min-h-0 flex flex-col relative">
           <div className="px-5 py-4 text-xs font-semibold tracking-[0.05em] uppercase flex items-center justify-between text-text-secondary">
             <button className="flex items-center gap-2 text-text-secondary hover:text-text-primary" onClick={() => setChatMenuOpen((v)=>!v)}>
               <span className="truncate max-w-[140px] text-text-primary normal-case text-sm font-medium">{(chats.find(c=>c.id===activeChatId)?.title) || 'Select chat'}</span>

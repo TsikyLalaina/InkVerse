@@ -6,6 +6,7 @@ import { buildSystemPromptForChat } from '../services/groq';
 import { getSummary, saveChatMemory, retrieveRelevant, getLastAssistantDraft } from '../services/memory';
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
+import { generateImage } from '../services/fal';
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY || '' });
 
@@ -116,6 +117,41 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
         if (typeof v !== 'string') return undefined;
         const t = v.trim();
         return t.length ? t : undefined;
+      };
+      const isStr = (v: any): v is string => typeof v === 'string';
+      const toStr = (v: any): string | undefined => {
+        if (typeof v === 'string') return v.trim();
+        if (Array.isArray(v)) return v.filter((x) => typeof x === 'string').join(', ').trim() || undefined;
+        if (v && typeof v === 'object') return JSON.stringify(v).slice(0, 2000);
+        return undefined;
+      };
+      const isPlaceholder = (s?: string) => !!s && /not yet defined|tbd|^n\/?a$/i.test(s);
+      const normalizeWorldTraits = (src: any): any => {
+        const t = isObj(src) ? { ...src } : {};
+        const geo = (t as any).geography;
+        if (geo && typeof geo === 'object') {
+          const gcities = toStr((geo as any).cities);
+          const ghouses = toStr((geo as any).houses);
+          const gland = toStr((geo as any).landscape);
+          if (gcities && (!isStr((t as any).cities) || isPlaceholder((t as any).cities))) (t as any).cities = gcities;
+          if (ghouses && (!isStr((t as any).houses) || isPlaceholder((t as any).houses))) (t as any).houses = ghouses;
+          if (gland && (!isStr((t as any).landscape) || isPlaceholder((t as any).landscape))) (t as any).landscape = gland;
+          const gstr = toStr((geo as any).geography) || toStr((geo as any).terrain) || undefined;
+          if (gstr && (!isStr((t as any).geography) || isPlaceholder((t as any).geography))) (t as any).geography = gstr;
+        }
+        ['geography','landscape','cities','houses'].forEach((k) => {
+          if (!isStr((t as any)[k])) {
+            const s = toStr((t as any)[k]);
+            if (s) (t as any)[k] = s;
+          }
+        });
+        if (geo && typeof geo === 'object') {
+          try { delete (t as any).geography.cities; } catch {}
+          try { delete (t as any).geography.houses; } catch {}
+          try { delete (t as any).geography.landscape; } catch {}
+          if (typeof (t as any).geography === 'object' && Object.keys((t as any).geography).length === 0) delete (t as any).geography;
+        }
+        return t;
       };
       // Extract the first top-level JSON object from the user's message (balanced braces, string-aware)
       const extractFirstJsonObject = (text: string): any | null => {
@@ -316,13 +352,43 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
               : null;
             const nameFromUser = typeof (fromUser as any)?.name === 'string' ? (fromUser as any).name : undefined;
             const summaryFromUser = typeof (fromUser as any)?.summary === 'string' ? (fromUser as any).summary : undefined;
-            let name = (draft.name || nameFromUser || mentions.title || '').trim();
+            let fromAssistant: any = null;
+            try {
+              const recent = await (prisma as any).chatMessage.findMany({
+                where: { chatId: params.chatId, role: 'assistant' },
+                orderBy: { createdAt: 'desc' },
+                take: 10,
+                select: { content: true },
+              } as any);
+              for (const m of (recent || [])) {
+                const parsed = extractFirstJsonObject(String((m as any).content || ''));
+                if (parsed && typeof parsed === 'object') { fromAssistant = parsed; break; }
+              }
+            } catch {}
+            const traitsFromAssistant = (fromAssistant && typeof fromAssistant === 'object')
+              ? (isObj((fromAssistant as any).traits)
+                  ? (fromAssistant as any).traits
+                  : (Array.isArray(fromAssistant)
+                      ? null
+                      : (!('id' in (fromAssistant as any) || 'name' in (fromAssistant as any) || 'summary' in (fromAssistant as any) || 'images' in (fromAssistant as any))
+                          ? fromAssistant
+                          : null)))
+              : null;
+            const nameFromAssistant = typeof (fromAssistant as any)?.name === 'string' ? (fromAssistant as any).name : undefined;
+            let name = (draft.name || nameFromUser || nameFromAssistant || mentions.title || '').trim();
             if (!name) {
+              // Try to infer world name from recent chat turns and @mentions
               const rawMsg = String((body as any).message || '');
+              const mQ = /@"([^"]+)"/.exec(rawMsg);
+              if (mQ?.[1]) name = mQ[1].trim();
+              if (!name) {
+                const mAt = /@([A-Z][A-Za-z0-9_\-]{2,})/.exec(rawMsg);
+                if (mAt?.[1]) name = mAt[1].trim();
+              }
               const m1 = /\b([A-Z][A-Za-z0-9_\-]{2,})\s+world\b/.exec(rawMsg);
               const m2 = /\bworld\s+(?:named|called|of)\s+([A-Z][A-Za-z0-9_\-]{2,})\b/.exec(rawMsg);
               const m3 = /\bthe\s+([A-Z][A-Za-z0-9_\-]{2,})\s+world\b/.exec(rawMsg);
-              name = (m1?.[1] || m2?.[1] || m3?.[1] || '').trim();
+              name = (m1?.[1] || m2?.[1] || m3?.[1] || name || '').trim();
             }
             let saved: any = null;
             if (name) {
@@ -331,13 +397,15 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
                 const step1 = isObj((existing as any).traits) && isObj(draft.traits)
                   ? deepMerge((existing as any).traits, draft.traits)
                   : (isObj((existing as any).traits) ? (existing as any).traits : (isObj(draft.traits) ? draft.traits : undefined));
-                const mergedTraits = isObj(traitsFromUser) ? deepMerge(step1 || {}, traitsFromUser) : step1;
+                const step2 = isObj(traitsFromUser) ? deepMerge(step1 || {}, traitsFromUser) : step1;
+                const mergedTraits = isObj(traitsFromAssistant) ? deepMerge(step2 || {}, traitsFromAssistant) : step2;
+                const normalized = normalizeWorldTraits(mergedTraits || {});
                 saved = await (prisma as any).worldSetting.update({
                   where: { id: (existing as any).id },
                   data: {
                     name: name || undefined,
-                    summary: cleanStr(draft.summary) ?? cleanStr(summaryFromUser) ?? undefined,
-                    traits: mergedTraits,
+                    summary: cleanStr(draft.summary) ?? cleanStr(summaryFromUser) ?? cleanStr((fromAssistant as any)?.summary) ?? undefined,
+                    traits: normalized,
                   },
                 } as any);
               } else {
@@ -345,12 +413,14 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
                   data: {
                     projectId: projectIdStr,
                     name: name || 'Untitled',
-                    summary: cleanStr(draft.summary) ?? cleanStr(summaryFromUser) ?? null,
+                    summary: cleanStr(draft.summary) ?? cleanStr(summaryFromUser) ?? cleanStr((fromAssistant as any)?.summary) ?? null,
                     traits: ((): any => {
                       let acc: any = {};
                       if (isObj(draft.traits)) acc = deepMerge(acc, draft.traits);
                       if (isObj(traitsFromUser)) acc = deepMerge(acc, traitsFromUser);
-                      return Object.keys(acc).length ? acc : null;
+                      if (isObj(traitsFromAssistant)) acc = deepMerge(acc, traitsFromAssistant);
+                      const norm = normalizeWorldTraits(acc);
+                      return Object.keys(norm).length ? norm : null;
                     })(),
                   },
                 } as any);
@@ -620,12 +690,13 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
         const summaryForCls = await getSummary(params.chatId);
         const clsSystem = [
           'You are an intent classifier for InkVerse chat. Return ONLY strict JSON.',
-          'Schema: { "action": "set_settings|create_chapter|convert_to_manhwa|update_chapter|none", "args": object|null, "confidence": number }',
+          'Schema: { "action": "set_settings|create_chapter|convert_to_manhwa|update_chapter|generate_character_image|none", "args": object|null, "confidence": number }',
           'Rules:',
           '- set_settings when user wants to update settings (e.g., genre, coreConflict, settingsJson). Treat synonyms like "save", "apply", "commit", or "update" (even without explicit field names) as set_settings if recent assistant output proposed settings.',
           '- create_chapter when user asks to write/draft/create a chapter.',
           '- update_chapter when user asks to rewrite/revise/edit an existing chapter. args can include { chapter_number?: number, title?: string }',
           '- convert_to_manhwa when user asks to convert text into panel script or generate panels.',
+          '- generate_character_image when the user asks to generate or create an image for a character. args can include { name?: string, description?: string }.',
           '- none otherwise.',
           'Return only JSON, no prose.'
         ].join('\n');
@@ -694,6 +765,55 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
               const msg = 'Warning: This is a ' + chatType + ' chat. Chapter creation is forbidden here. Open a Plot chat to proceed.';
               send({ type: 'text', content: msg });
               await persistAssistant(msg);
+            }
+          }
+          if (action === 'generate_character_image') {
+            if (chatType !== 'character') {
+              const msg = 'Image generation is restricted to Character chats.';
+              send({ type: 'text', content: msg });
+              await persistAssistant(msg);
+            } else if (clientMode !== 'action') {
+              const msg = 'Switch to Action mode to generate character images.';
+              send({ type: 'text', content: msg });
+              await persistAssistant(msg);
+            } else {
+              try {
+                const args = (parsed?.args || {}) as any;
+                let name = (args.name || mentions.title || '').trim();
+                if (!name) {
+                  const m = /@"([^"]+)"/.exec(String(body.message));
+                  if (m?.[1]) name = m[1].trim();
+                }
+                if (!name) {
+                  const msg = 'Provide a character name with @"Name" to generate an image.';
+                  send({ type: 'text', content: msg });
+                  await persistAssistant(msg);
+                } else {
+                  const target = await (prisma as any).character.findFirst({ where: { projectId: projectIdStr, name: { equals: name, mode: 'insensitive' } }, select: { id: true, images: true, imageUrl: true } } as any);
+                  if (!target) {
+                    const msg = `Character not found: ${name}. Create it first or check spelling.`;
+                    send({ type: 'text', content: msg });
+                    await persistAssistant(msg);
+                  } else {
+                    const description = String(args.description || body.message).slice(0, 500);
+                    const url = await generateImage(description, {});
+                    try {
+                      const current: string[] = Array.isArray((target as any).images) ? ((target as any).images as string[]) : [];
+                      const next = [...current, url];
+                      await (prisma as any).character.update({ where: { id: (target as any).id }, data: { images: next, imageUrl: (target as any).imageUrl || url } } as any);
+                    } catch {}
+                    await (prisma as any).chatMessage.create({ data: { chatId: params.chatId, role: 'assistant', content: url, panelId: null } } as any);
+                    send({ type: 'image', url });
+                    send({ type: 'done' });
+                    reply.raw.end();
+                    return reply;
+                  }
+                }
+              } catch (e: any) {
+                const msg = e?.message || 'Image generation failed';
+                send({ type: 'error', message: msg });
+                await persistAssistant(`Error: ${msg}`);
+              }
             }
           }
         }

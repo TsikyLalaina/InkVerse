@@ -1,7 +1,28 @@
 import type { FastifyPluginCallback } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../db/prisma';
+import { createClient } from '@supabase/supabase-js';
 const ChatTypeEnum = z.enum(['plot','character','world']);
+
+const sbUrl = process.env.SUPABASE_URL;
+const sbServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseAdmin = (sbUrl && sbServiceKey) ? createClient(sbUrl as string, sbServiceKey as string) : null;
+
+function parseSupabasePublicUrl(url: string): { bucket: string; path: string } | null {
+  try {
+    const idx = url.indexOf('/storage/v1/object/public/');
+    if (idx === -1) return null;
+    const rest = url.slice(idx + '/storage/v1/object/public/'.length);
+    const firstSlash = rest.indexOf('/');
+    if (firstSlash === -1) return null;
+    const bucket = rest.slice(0, firstSlash);
+    const path = rest.slice(firstSlash + 1);
+    if (!bucket || !path) return null;
+    return { bucket, path };
+  } catch {
+    return null;
+  }
+}
 
 const uuidParam = z.object({ id: z.string().uuid() });
 const createBody = z.object({ title: z.string().min(1), description: z.string().optional() });
@@ -229,6 +250,7 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true } });
     if (!project) return reply.code(404).send({ error: 'Not found' });
     const body = worldCreateBody.parse(req.body);
+    try { (req as any).log?.info?.({ route: 'world.create', projectId: params.id, hasImages: Array.isArray(body.images), imagesCount: (body.images || []).length }, 'World CREATE start'); } catch {}
     let traits: any = undefined;
     if (Array.isArray(body.traitsOps) && body.traitsOps.length) traits = applyTraitsOps({}, body.traitsOps as any);
     else if (body.traits !== undefined) traits = body.traits;
@@ -236,6 +258,7 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
       data: { projectId: project.id, name: body.name, summary: body.summary ?? null, traits: traits ?? null, images: (body.images ?? null) },
       select: { id: true, name: true, summary: true, traits: true, images: true, createdAt: true },
     } as any);
+    try { (req as any).log?.info?.({ route: 'world.create', id: (created as any).id }, 'World CREATE done'); } catch {}
     return reply.code(201).send(created);
   });
 
@@ -246,6 +269,7 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true } });
     if (!project) return reply.code(404).send({ error: 'Not found' });
     const body = worldUpdateBody.parse(req.body);
+    try { (req as any).log?.info?.({ route: 'world.patch', projectId: params.id, id: params.wsId, hasImages: body.images !== undefined, imagesCount: (body.images || []).length }, 'World PATCH start'); } catch {}
     const existing = await (prisma as any).worldSetting.findFirst({ where: { id: params.wsId, projectId: project.id }, select: { traits: true, images: true } });
     if (!existing) return reply.code(404).send({ error: 'Not found' });
     let traits: any = undefined;
@@ -260,8 +284,28 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
         images: body.images === undefined ? undefined : (body.images ?? null),
       },
     } as any);
+    try { (req as any).log?.info?.({ route: 'world.patch', id: params.wsId, updatedCount: updated.count }, 'World PATCH updated'); } catch {}
     if (!updated.count) return reply.code(404).send({ error: 'Not found' });
+    // Best-effort: remove deleted images from Supabase storage (server-side)
+    if (Array.isArray((existing as any)?.images)) {
+      if (Array.isArray(body.images)) {
+        const prevImages: string[] = ((existing as any).images as string[]) || [];
+        const nextSet = new Set(body.images as string[]);
+        const removed = prevImages.filter((u) => !nextSet.has(u));
+        if (removed.length && supabaseAdmin) {
+          for (const u of removed) {
+            try {
+              const parsed = parseSupabasePublicUrl(u);
+              if (parsed) {
+                await supabaseAdmin.storage.from(parsed.bucket).remove([parsed.path]);
+              }
+            } catch {}
+          }
+        }
+      }
+    }
     const result = await (prisma as any).worldSetting.findFirst({ where: { id: params.wsId, projectId: project.id }, select: { id: true, name: true, summary: true, traits: true, images: true, updatedAt: true } });
+    try { (req as any).log?.info?.({ route: 'world.patch', id: params.wsId }, 'World PATCH done'); } catch {}
     return reply.send(result);
   });
 
@@ -271,6 +315,20 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
     const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true } });
     if (!project) return reply.code(404).send({ error: 'Not found' });
+    try {
+      const existing = await (prisma as any).worldSetting.findFirst({ where: { id: params.wsId, projectId: project.id }, select: { images: true } });
+      const imgs: string[] = Array.isArray((existing as any)?.images) ? ((existing as any).images as string[]) : [];
+      if (imgs.length && supabaseAdmin) {
+        for (const u of imgs) {
+          try {
+            const parsed = parseSupabasePublicUrl(u);
+            if (parsed) {
+              await supabaseAdmin.storage.from(parsed.bucket).remove([parsed.path]);
+            }
+          } catch {}
+        }
+      }
+    } catch {}
     const del = await (prisma as any).worldSetting.deleteMany({ where: { id: params.wsId, projectId: project.id } });
     if (!del.count) return reply.code(404).send({ error: 'Not found' });
     return reply.code(204).send();
@@ -535,8 +593,8 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     const items = await (prisma as any).character.findMany({
       where: { projectId: project.id },
       orderBy: { createdAt: 'asc' },
-      // images column may or may not exist yet; select imageUrl and compute images on the fly
-      select: { id: true, name: true, role: true, summary: true, traits: true, imageUrl: true, createdAt: true, updatedAt: true },
+      // Include images and imageUrl; compute fallback if images is missing
+      select: { id: true, name: true, role: true, summary: true, traits: true, images: true, imageUrl: true, createdAt: true, updatedAt: true },
     } as any);
     const withImages = (items as any[]).map((c: any) => ({
       ...c,
@@ -552,6 +610,7 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true, mode: true } as any });
     if (!project) return reply.code(404).send({ error: 'Not found' });
     const body = characterCreateBody.parse(req.body);
+    try { (req as any).log?.info?.({ route: 'characters.create', projectId: params.id, hasImages: Array.isArray(body.images), imagesCount: (body.images || []).length }, 'Characters CREATE start'); } catch {}
     if ((project as any).mode === 'manhwa' && !(body.images && body.images.length)) {
       return reply.code(400).send({ error: 'At least one image is required in manhwa mode' });
     }
@@ -559,16 +618,26 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     if (Array.isArray(body.traitsOps) && body.traitsOps.length) traits = applyTraitsOps({}, body.traitsOps as any);
     else if (body.traits !== undefined) traits = body.traits;
     const created = await (prisma as any).character.create({
-      data: { projectId: project.id, name: body.name, role: body.role ?? null, summary: body.summary ?? null, imageUrl: (body.images && body.images[0]) ? body.images[0] : null, traits: traits ?? null },
+      data: {
+        projectId: project.id,
+        name: body.name,
+        role: body.role ?? null,
+        summary: body.summary ?? null,
+        imageUrl: (body.images && body.images[0]) ? body.images[0] : null,
+        images: (body.images ?? null),
+        traits: traits ?? null,
+      },
       select: { id: true, name: true, role: true, summary: true, traits: true, imageUrl: true, createdAt: true },
     } as any);
     // Best-effort: update images JSON column if present
     if (Array.isArray(body.images)) {
       try {
         await (prisma as any).character.update({ where: { id: created.id }, data: { images: body.images } } as any);
+        try { (req as any).log?.info?.({ route: 'characters.create', id: created.id, imagesCount: (body.images || []).length }, 'Characters CREATE images persisted'); } catch {}
       } catch {}
     }
     const result = { ...created, images: Array.isArray(body.images) ? body.images : (created.imageUrl ? [created.imageUrl] : []) };
+    try { (req as any).log?.info?.({ route: 'characters.create', id: (result as any).id }, 'Characters CREATE done'); } catch {}
     return reply.code(201).send(result);
   });
 
@@ -579,11 +648,12 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true, mode: true } as any });
     if (!project) return reply.code(404).send({ error: 'Not found' });
     const body = characterUpdateBody.parse(req.body);
+    try { (req as any).log?.info?.({ route: 'characters.patch', projectId: params.id, id: params.charId, hasImages: body.images !== undefined, imagesCount: (body.images || []).length }, 'Characters PATCH start'); } catch {}
     if ((project as any).mode === 'manhwa' && (body.images !== undefined) && (!body.images || body.images.length === 0)) {
       return reply.code(400).send({ error: 'Cannot remove all images in manhwa mode' });
     }
     // Load existing to apply traitsOps
-    const existing = await (prisma as any).character.findFirst({ where: { id: params.charId, projectId: project.id }, select: { traits: true } });
+    const existing = await (prisma as any).character.findFirst({ where: { id: params.charId, projectId: project.id }, select: { traits: true, images: true, imageUrl: true } });
     if (!existing) return reply.code(404).send({ error: 'Not found' });
     let traits: any = undefined;
     if (Array.isArray(body.traitsOps) && body.traitsOps.length) traits = applyTraitsOps(existing.traits || {}, body.traitsOps as any);
@@ -595,18 +665,40 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
         role: body.role ?? undefined,
         summary: body.summary ?? undefined,
         imageUrl: Array.isArray(body.images) ? (body.images[0] ?? null) as any : undefined,
+        images: body.images === undefined ? undefined : (body.images ?? null),
         traits: traits === undefined ? undefined : traits,
       },
     } as any);
+    try { (req as any).log?.info?.({ route: 'characters.patch', id: params.charId, updatedCount: updated.count }, 'Characters PATCH updated'); } catch {}
     if (!updated.count) return reply.code(404).send({ error: 'Not found' });
+    // Best-effort: remove deleted images from Supabase storage (server-side)
+    if (Array.isArray((existing as any)?.images) || (existing as any)?.imageUrl) {
+      const prevImages: string[] = Array.isArray((existing as any).images) ? ((existing as any).images as string[]) : (((existing as any).imageUrl) ? [ (existing as any).imageUrl as string ] : []);
+      if (Array.isArray(body.images)) {
+        const nextSet = new Set(body.images as string[]);
+        const removed = prevImages.filter((u) => !nextSet.has(u));
+        if (removed.length && supabaseAdmin) {
+          for (const u of removed) {
+            try {
+              const parsed = parseSupabasePublicUrl(u);
+              if (parsed) {
+                await supabaseAdmin.storage.from(parsed.bucket).remove([parsed.path]);
+              }
+            } catch {}
+          }
+        }
+      }
+    }
     // Best-effort: update images JSON column if present
     if (body.images !== undefined) {
       try {
         await (prisma as any).character.update({ where: { id: params.charId }, data: { images: body.images } } as any);
+        try { (req as any).log?.info?.({ route: 'characters.patch', id: params.charId, imagesCount: (body.images || []).length }, 'Characters PATCH images persisted'); } catch {}
       } catch {}
     }
-    const result = await (prisma as any).character.findFirst({ where: { id: params.charId, projectId: project.id }, select: { id: true, name: true, role: true, summary: true, traits: true, imageUrl: true, updatedAt: true } });
+    const result = await (prisma as any).character.findFirst({ where: { id: params.charId, projectId: project.id }, select: { id: true, name: true, role: true, summary: true, traits: true, images: true, imageUrl: true, updatedAt: true } });
     const withImages = { ...(result as any), images: ((result as any)?.images ?? (((result as any)?.imageUrl) ? [(result as any).imageUrl] : [])) };
+    try { (req as any).log?.info?.({ route: 'characters.patch', id: params.charId }, 'Characters PATCH done'); } catch {}
     return reply.send(withImages);
   });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useDrag } from 'react-dnd';
 import type { DragSourceMonitor } from 'react-dnd';
 import { z } from 'zod';
@@ -33,6 +33,11 @@ export function PanelCard({
   const [description, setDescription] = useState(initialDescription || '');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [localImageUrl, setLocalImageUrl] = useState<string | null>(imageUrl || null);
+
+  useEffect(() => {
+    setLocalImageUrl(imageUrl || null);
+  }, [imageUrl]);
 
   const [{ isDragging }, drag] = useDrag(() => ({
     type: 'PANEL',
@@ -79,6 +84,7 @@ export function PanelCard({
       });
       if (!res.ok) throw new Error(`Failed to queue image (${res.status})`);
       const json = await res.json();
+      if (json?.url) setLocalImageUrl(String(json.url));
       if (json?.jobId) onRegenerateQueued?.(String(json.jobId));
     } catch (e: any) {
       setError(e?.message || 'Failed to queue image');
@@ -92,9 +98,9 @@ export function PanelCard({
       ref={panelId ? (drag as any) : undefined}
       className={`rounded-lg border border-slate-800 bg-slate-900/60 p-3 space-y-3 ${isDragging ? 'opacity-60' : ''}`}
     >
-      {imageUrl ? (
+      {localImageUrl ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={imageUrl} alt="panel" className="w-full h-auto rounded-md" />
+        <img src={localImageUrl} alt="panel" className="w-full h-auto rounded-md" />
       ) : (
         <div className="w-full aspect-[3/4] bg-slate-800 rounded-md grid place-items-center text-slate-500 text-sm">
           No image

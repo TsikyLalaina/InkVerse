@@ -124,12 +124,12 @@ export function createApi(supabase: SupabaseClient) {
       apiFetch<any[]>(supabase, `/api/project/${projectId}/world`),
     createWorldSetting: (
       projectId: string,
-      body: { name: string; summary?: string; traits?: any; traitsOps?: Array<{ op: 'set'|'delete'; path: string[]; value?: any }> }
+      body: { name: string; summary?: string; traits?: any; images?: string[]; traitsOps?: Array<{ op: 'set'|'delete'; path: string[]; value?: any }> }
     ) => apiFetch<any>(supabase, `/api/project/${projectId}/world`, { method: 'POST', body: JSON.stringify(body) }),
     updateWorldSetting: (
       projectId: string,
       wsId: string,
-      body: { name?: string; summary?: string; traits?: any; traitsOps?: Array<{ op: 'set'|'delete'; path: string[]; value?: any }> }
+      body: { name?: string; summary?: string; traits?: any; images?: string[]; traitsOps?: Array<{ op: 'set'|'delete'; path: string[]; value?: any }> }
     ) => apiFetch<any>(supabase, `/api/project/${projectId}/world/${wsId}`, { method: 'PATCH', body: JSON.stringify(body) }),
     deleteWorldSetting: (
       projectId: string,
@@ -218,9 +218,9 @@ export function createApi(supabase: SupabaseClient) {
       }
     },
 
-    // Image generation (queued)
+    // Image generation (queued or direct fallback)
     generateImage: (body: { description: string; style?: string; projectId?: string }) =>
-      apiFetch<{ jobId: string }>(supabase, `/api/generate/image`, {
+      apiFetch<{ jobId: string; url?: string; queued?: boolean; cached?: boolean }>(supabase, `/api/generate/image`, {
         method: 'POST',
         body: JSON.stringify(body),
       }),

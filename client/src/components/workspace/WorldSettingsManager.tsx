@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSupabase } from "@/components/providers/SupabaseProvider";
 import { createApi } from "@/lib/api";
 import { Loader2, Plus, Search, Trash2, Upload, X } from "lucide-react";
@@ -19,6 +19,22 @@ type WorldItem = {
   updatedAt?: string;
 };
 
+function parseSupabasePublicUrl(url: string): { bucket: string; path: string } | null {
+  try {
+    const idx = url.indexOf('/storage/v1/object/public/');
+    if (idx === -1) return null;
+    const rest = url.slice(idx + '/storage/v1/object/public/'.length);
+    const firstSlash = rest.indexOf('/');
+    if (firstSlash === -1) return null;
+    const bucket = rest.slice(0, firstSlash);
+    const path = rest.slice(firstSlash + 1);
+    if (!bucket || !path) return null;
+    return { bucket, path };
+  } catch {
+    return null;
+  }
+}
+
 export function WorldSettingsManager({ projectId }: { projectId: string }) {
   const supabase = useSupabase();
   const api = useMemo(() => createApi(supabase), [supabase]);
@@ -36,6 +52,7 @@ export function WorldSettingsManager({ projectId }: { projectId: string }) {
   const [form, setForm] = useState<WorldItem>({ name: "" });
   const [traits, setTraits] = useState<any>({});
   const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<'idle'|'uploading'|'uploaded'|'error'>('idle');
   const dropRef = useRef<HTMLDivElement | null>(null);
 
   const cacheKey = useMemo(() => `inkverse_project_${projectId}_world`, [projectId]);
@@ -64,25 +81,66 @@ export function WorldSettingsManager({ projectId }: { projectId: string }) {
     toastTimer.current = setTimeout(() => setToast(""), 2500);
   };
 
-  const onUploadFile = async (file: File) => {
-    if (!file) return;
+  const onUploadFiles = useCallback(async (files: File[]) => {
+    if (!files || files.length === 0) return;
     setUploading(true);
+    setUploadStatus('uploading');
+    const startImages = (form.images || []) as string[];
+    const newUrls: string[] = [];
     try {
-      const bucket = process.env.NEXT_PUBLIC_SUPABASE_WORLD_BUCKET || "world-images";
-      const ext = file.name.split('.').pop() || 'jpg';
-      const path = `${projectId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-      const { error: upErr } = await supabase.storage.from(bucket).upload(path, file, { upsert: true, contentType: file.type });
-      if (upErr) throw upErr;
-      const { data } = supabase.storage.from(bucket).getPublicUrl(path);
-      const url = data.publicUrl;
-      setForm((f) => ({ ...f, images: [...(f.images || []), url] }));
-      notify('Image uploaded');
+      const bucket = process.env.NEXT_PUBLIC_SUPABASE_WORLD_BUCKET
+        || process.env.NEXT_PUBLIC_SUPABASE_IMAGE_BUCKET
+        || process.env.NEXT_PUBLIC_SUPABASE_BUCKET
+        || "world-images";
+      for (const file of files) {
+        const ext = file.name.split('.').pop() || 'jpg';
+        const path = `${projectId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+        try { console.debug('Supabase world upload start', { bucket, path, file: { name: file.name, type: file.type, size: file.size } }); } catch {}
+        const { error: upErr } = await supabase.storage.from(bucket).upload(path, file, { upsert: true, contentType: file.type });
+        if (upErr) throw upErr;
+        const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+        const url = data.publicUrl;
+        newUrls.push(url);
+        setForm((f) => ({ ...f, images: [ ...(f.images || []), url ] }));
+        try { console.debug('Supabase world upload done', { url }); } catch {}
+      }
+
+      const nextImages = [...startImages, ...newUrls];
+      if (activeId === "__new__") {
+        try {
+          const name = (form.name && form.name.trim()) || 'Untitled World';
+          const payload = { name, summary: form.summary || undefined, traits, images: nextImages } as any;
+          try { console.debug('Auto-creating world after batch upload', { name, imagesCount: nextImages.length }); } catch {}
+          const created = await api.createWorldSetting(projectId, payload);
+          setItems((prev) => [...prev, created]);
+          setActiveId(created.id);
+          try { console.debug('Auto-created world', { id: created.id }); } catch {}
+        } catch (e: any) {
+          notify(e?.message || 'Failed to create world entry');
+          try { console.error('Auto-create world failed', e); } catch {}
+        }
+      } else if (activeId) {
+        try {
+          try { console.debug('Persisting world images (batch)', { wsId: activeId, count: nextImages.length }); } catch {}
+          const res = await api.updateWorldSetting(projectId, activeId, { images: nextImages });
+          setItems((prev) => prev.map((x) => (x.id === res.id ? res : x)));
+          try { console.debug('Persisted world images ok', { id: res.id }); } catch {}
+        } catch (e: any) {
+          notify(e?.message || 'Failed to persist images');
+          try { console.error('Persisting world images failed', e); } catch {}
+        }
+      }
+      notify('Image(s) uploaded');
+      setUploadStatus('uploaded');
+      setTimeout(() => { try { setUploadStatus('idle'); } catch {} }, 2000);
     } catch (e: any) {
       notify(e?.message || 'Upload failed');
+      try { console.error('World upload failed', e); } catch {}
+      setUploadStatus('error');
     } finally {
       setUploading(false);
     }
-  };
+  }, [projectId, supabase, activeId, api, form, traits]);
 
   // Drag & drop handlers
   useEffect(() => {
@@ -90,8 +148,8 @@ export function WorldSettingsManager({ projectId }: { projectId: string }) {
     if (!el) return;
     const onDrop = (e: DragEvent) => {
       e.preventDefault();
-      const f = e.dataTransfer?.files?.[0];
-      if (f) void onUploadFile(f);
+      const files = Array.from(e.dataTransfer?.files || []);
+      if (files.length) { (async () => { await onUploadFiles(files as File[]); })(); }
       el.classList.remove("ring-2", "ring-blue-500");
     };
     const onDrag = (e: DragEvent) => {
@@ -110,7 +168,7 @@ export function WorldSettingsManager({ projectId }: { projectId: string }) {
       el.removeEventListener("dragover", onDrag as any);
       el.removeEventListener("dragleave", onLeave as any);
     };
-  }, [onUploadFile]);
+  }, [onUploadFiles]);
 
   useEffect(() => {
     let mounted = true;
@@ -390,18 +448,37 @@ export function WorldSettingsManager({ projectId }: { projectId: string }) {
                     <label className="px-3 py-2 rounded-md border border-border-default bg-bg-primary text-text-secondary hover:text-text-primary inline-flex items-center gap-2 cursor-pointer">
                       <Upload className="w-4 h-4" />
                       Upload Image
-                      <input type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void onUploadFile(f); }} />
+                      <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => { const files = Array.from(e.target.files || []); if (files.length) { (async () => { await onUploadFiles(files as File[]); })(); } }} />
                     </label>
                     {uploading && <div className="text-xs text-text-tertiary inline-flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin" /> Uploading…</div>}
+                    {uploadStatus === 'uploaded' && !uploading && <div className="text-xs text-green-400">Uploaded</div>}
+                    {uploadStatus === 'error' && !uploading && <div className="text-xs text-red-400">Upload failed</div>}
                   </div>
-                  <div className="grid grid-cols-4 gap-2 w-full">
+                  <div className="flex gap-2 overflow-x-auto w-full pb-1">
                     {(form.images || []).map((url, idx) => (
-                      <div key={idx} className="relative group border border-border-default rounded-md overflow-hidden bg-bg-primary">
-                        <img src={url} alt="world" className="w-full h-20 object-cover" />
+                      <div key={idx} className="relative border border-border-default rounded-md overflow-hidden bg-bg-primary flex-none w-24 h-24">
+                        <img src={url} alt="world" className="w-full h-full object-cover" />
                         <button
-                          className="absolute top-1 right-1 bg-black/50 text-white rounded p-1 opacity-0 group-hover:opacity-100"
+                          className="absolute top-1 right-1 bg-black/60 text-white rounded p-1"
                           title="Remove"
-                          onClick={() => setForm((f)=> ({ ...f, images: (f.images || []).filter((_,i)=>i!==idx) }))}
+                          onClick={async () => {
+                            const removedUrl = (form.images || [])[idx];
+                            const nextImages: string[] = (form.images || []).filter((_,i)=>i!==idx);
+                            setForm((f)=> ({ ...f, images: nextImages }));
+                            if (activeId && activeId !== "__new__") {
+                              try {
+                                const res = await api.updateWorldSetting(projectId, activeId, { images: nextImages });
+                                setItems((prev) => prev.map((x) => (x.id === res.id ? res : x)));
+                                notify('Image removed');
+                                try {
+                                  const parsed = removedUrl ? parseSupabasePublicUrl(removedUrl) : null;
+                                  if (parsed) { await supabase.storage.from(parsed.bucket).remove([parsed.path]); }
+                                } catch {}
+                              } catch (e: any) {
+                                notify(e?.message || 'Failed to persist removal');
+                              }
+                            }
+                          }}
                         >
                           <X className="w-3 h-3" />
                         </button>

@@ -2,19 +2,14 @@ import type { FastifyPluginCallback } from 'fastify';
 import { z } from 'zod';
 import Groq from 'groq-sdk';
 import { buildSystemPrompt } from '../services/groq';
-import { Queue } from 'bullmq';
-import IORedis from 'ioredis';
 import { prisma } from '../db/prisma';
 import crypto from 'crypto';
+import { createQueue, isQueueConfigured, connection as redis } from '../services/queue';
+import { generateImage } from '../services/fal';
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY || '' });
 
-const redisUrl = process.env.UPSTASH_REDIS_URL || '';
-const redis = redisUrl
-  ? new IORedis(redisUrl, { tls: redisUrl.startsWith('rediss://') ? {} : undefined })
-  : null;
-
-const imageQueue = redis ? new Queue('fal-image', { connection: redis }) : null;
+const imageQueue = isQueueConfigured() ? createQueue('fal-image') : null;
 
 function hash(input: string) {
   return crypto.createHash('sha256').update(input).digest('hex');
@@ -117,18 +112,34 @@ const generateRoutes: FastifyPluginCallback = (app, _opts, done) => {
     const keyBase = `${body.description}|${body.style || ''}`;
     const cacheKey = `gen:image:job:${hash(keyBase)}`;
 
-    if (!imageQueue || !redis) {
-      return reply.code(503).send({ error: 'Image queue disabled (Redis unavailable)' });
+    // If queue is unavailable, fall back to synchronous generation via Fal and persist via Prisma (Supabase Postgres)
+    if (!imageQueue) {
+      try {
+        // Optional: verify project if provided
+        if (body.projectId) {
+          const owns = await prisma.project.findFirst({ where: { id: body.projectId, userId: user.id }, select: { id: true } });
+          if (!owns) return reply.code(404).send({ error: 'Project not found' });
+        }
+
+        const url = await generateImage(body.description, { style: body.style || undefined });
+
+        const jobId = `direct:${hash(url)}`;
+        return reply.send({ jobId, url, queued: false });
+      } catch (e: any) {
+        return reply.code(500).send({ error: 'Direct Fal generate failed', detail: e?.message || '' });
+      }
     }
 
-    // Return cached job id if exists to dedupe
-    try {
-      const cachedJobId = await redis.get(cacheKey);
-      if (cachedJobId) {
-        return reply.send({ jobId: cachedJobId, cached: true });
+    // Return cached job id if exists to dedupe (best-effort)
+    if (redis) {
+      try {
+        const cachedJobId = await redis.get(cacheKey);
+        if (cachedJobId) {
+          return reply.send({ jobId: cachedJobId, cached: true });
+        }
+      } catch (e: any) {
+        return reply.code(429).send({ error: 'Image queue rate limited (Redis)', detail: e?.message || '' });
       }
-    } catch (e: any) {
-      return reply.code(429).send({ error: 'Image queue rate limited (Redis)', detail: e?.message || '' });
     }
 
     // Optional: verify project if provided
@@ -140,9 +151,9 @@ const generateRoutes: FastifyPluginCallback = (app, _opts, done) => {
     const webhookBase = process.env.WEBHOOK_BASE_URL || '';
     let job;
     try {
-      job = await imageQueue.add('fal.flux1-schnell', {
+      job = await imageQueue.add('fal.flux-schnell', {
         provider: 'fal',
-        model: 'flux.1-schnell',
+        model: 'fal-ai/flux/schnell',
         description: body.description,
         style: body.style || null,
         userId: user.id,
@@ -158,7 +169,7 @@ const generateRoutes: FastifyPluginCallback = (app, _opts, done) => {
       return reply.code(500).send({ error: 'Failed to enqueue image job (no id)' });
     }
 
-    try { await redis.setex(cacheKey, 10 * 60, jobId); } catch {}
+    try { if (redis) await redis.setex(cacheKey, 10 * 60, jobId); } catch {}
 
     return reply.send({ jobId });
   });

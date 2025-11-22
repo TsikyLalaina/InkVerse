@@ -55,6 +55,22 @@ function toNestedFromTags(tags: Array<{ key: string; value: string }>) {
   return obj;
 }
 
+function parseSupabasePublicUrl(url: string): { bucket: string; path: string } | null {
+  try {
+    const idx = url.indexOf('/storage/v1/object/public/');
+    if (idx === -1) return null;
+    const rest = url.slice(idx + '/storage/v1/object/public/'.length);
+    const firstSlash = rest.indexOf('/');
+    if (firstSlash === -1) return null;
+    const bucket = rest.slice(0, firstSlash);
+    const path = rest.slice(firstSlash + 1);
+    if (!bucket || !path) return null;
+    return { bucket, path };
+  } catch {
+    return null;
+  }
+}
+
 export function CharacterManager({ projectId, requireImage }: { projectId: string; requireImage: boolean }) {
   const supabase = useSupabase();
   const api = useMemo(() => createApi(supabase), [supabase]);
@@ -72,7 +88,14 @@ export function CharacterManager({ projectId, requireImage }: { projectId: strin
   const [form, setForm] = useState<CharacterItem>({ name: "", images: [] });
   const [traits, setTraits] = useState<any>({});
   const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<'idle'|'uploading'|'uploaded'|'error'>('idle');
   const dropRef = useRef<HTMLDivElement | null>(null);
+
+  const supaEnvOk = !!process.env.NEXT_PUBLIC_SUPABASE_URL && !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const charBucketName = process.env.NEXT_PUBLIC_SUPABASE_CHAR_BUCKET
+    || process.env.NEXT_PUBLIC_SUPABASE_IMAGE_BUCKET
+    || process.env.NEXT_PUBLIC_SUPABASE_BUCKET
+    || "character-images";
 
   const cacheKey = useMemo(() => `inkverse_project_${projectId}_characters`, [projectId]);
   const activeKey = useMemo(() => `inkverse_project_${projectId}_characters_active`, [projectId]);
@@ -198,33 +221,78 @@ export function CharacterManager({ projectId, requireImage }: { projectId: strin
     toastTimer.current = setTimeout(() => setToast(""), 2500);
   };
 
-  const onUploadFile = useCallback(async (file: File) => {
-    if (!file) return;
+  const onUploadFiles = useCallback(async (files: File[]) => {
+    if (!files || files.length === 0) return;
     setUploading(true);
+    setUploadStatus('uploading');
+    const startImages = (form.images || []) as string[];
+    const newUrls: string[] = [];
     try {
-      const bucket = process.env.NEXT_PUBLIC_SUPABASE_CHAR_BUCKET || "character-images";
-      const ext = file.name.split(".").pop() || "jpg";
-      const path = `${projectId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-      const { error: upErr } = await supabase.storage.from(bucket).upload(path, file, { upsert: true, contentType: file.type });
-      if (upErr) throw upErr;
-      const { data } = supabase.storage.from(bucket).getPublicUrl(path);
-      const url = data.publicUrl;
-      setForm((f) => ({ ...f, images: [url] }));
-      notify("Image uploaded");
+      const bucket = process.env.NEXT_PUBLIC_SUPABASE_CHAR_BUCKET
+        || process.env.NEXT_PUBLIC_SUPABASE_IMAGE_BUCKET
+        || process.env.NEXT_PUBLIC_SUPABASE_BUCKET
+        || "character-images";
+      for (const file of files) {
+        const ext = file.name.split(".").pop() || "jpg";
+        const path = `${projectId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+        try { console.debug('Supabase upload start', { bucket, path, file: { name: file.name, type: file.type, size: file.size } }); } catch {}
+        const { error: upErr } = await supabase.storage.from(bucket).upload(path, file, { upsert: true, contentType: file.type });
+        if (upErr) throw upErr;
+        const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+        const url = data.publicUrl;
+        newUrls.push(url);
+        // Optimistically reflect in UI per file
+        setForm((f) => ({ ...f, images: [ ...(f.images || []), url ] }));
+        try { console.debug('Supabase upload done', { url }); } catch {}
+      }
+
+      const nextImages = [...startImages, ...newUrls];
+      if (activeId === "__new__") {
+        try {
+          const name = (form.name && form.name.trim()) || 'Untitled Character';
+          const payload = { name, role: form.role || undefined, summary: form.summary || undefined, images: nextImages, traits } as any;
+          try { console.debug('Auto-creating character after batch upload', { name, imagesCount: nextImages.length }); } catch {}
+          const created = await api.createCharacter(projectId, payload);
+          setItems((prev) => [...prev, created]);
+          setActiveId(created.id);
+          try { console.debug('Auto-created character', { id: created.id }); } catch {}
+        } catch (e: any) {
+          notify(e?.message || 'Failed to create character');
+          try { console.error('Auto-create character failed', e); } catch {}
+        }
+      } else if (activeId) {
+        try {
+          try { console.debug('Persisting character images (batch)', { charId: activeId, count: nextImages.length }); } catch {}
+          const res = await api.updateCharacter(projectId, activeId, { images: nextImages });
+          setItems((prev) => prev.map((x) => (x.id === res.id ? res : x)));
+          try { console.debug('Persisted character images ok', { id: res.id }); } catch {}
+        } catch (e: any) {
+          notify(e?.message || 'Failed to persist images');
+          try { console.error('Persisting character images failed', e); } catch {}
+        }
+      }
+
+      notify('Image(s) uploaded');
+      setUploadStatus('uploaded');
+      setTimeout(() => { try { setUploadStatus('idle'); } catch {} }, 2000);
     } catch (e: any) {
-      notify(e?.message || "Upload failed");
+      notify(e?.message || 'Upload failed');
+      try { console.error('Upload failed', e); } catch {}
+      setUploadStatus('error');
     } finally {
       setUploading(false);
     }
-  }, [projectId, supabase]);
+  }, [projectId, supabase, activeId, api, form, traits]);
 
   useEffect(() => {
     const el = dropRef.current;
     if (!el) return;
     const onDrop = (e: DragEvent) => {
       e.preventDefault();
-      const f = e.dataTransfer?.files?.[0];
-      if (f) void onUploadFile(f);
+      const files = Array.from(e.dataTransfer?.files || []);
+      if (files.length) {
+        (async () => { await onUploadFiles(files as File[]); })();
+      }
       el.classList.remove("ring-2", "ring-blue-500");
     };
     const onDrag = (e: DragEvent) => {
@@ -243,7 +311,7 @@ export function CharacterManager({ projectId, requireImage }: { projectId: strin
       el.removeEventListener("dragover", onDrag as any);
       el.removeEventListener("dragleave", onLeave as any);
     };
-  }, [onUploadFile]);
+  }, [onUploadFiles]);
 
   // ----- Traits editor helpers (strings-only values, arrays supported, depth<=5) -----
   const clone = (o: any) => JSON.parse(JSON.stringify(o ?? {}));
@@ -437,24 +505,56 @@ export function CharacterManager({ projectId, requireImage }: { projectId: strin
         <section className="min-h-0 overflow-y-auto p-6" aria-label="Character details">
           {activeId ? (
             <div className="max-w-2xl mx-auto">
-              <div ref={dropRef} className="flex flex-col items-center mb-6 p-4 rounded-xl border border-border-default bg-bg-elevated">
-                <div className="w-30 h-30 w-[120px] h-[120px] rounded-full overflow-hidden border border-border-default bg-bg-primary flex items-center justify-center">
-                  {(form.images?.[0]) ? <img src={form.images[0]} alt="avatar" className="w-full h-full object-cover" /> : <div className="text-xs text-text-tertiary">No Image</div>}
-                </div>
-                <div className="mt-3 flex items-center gap-2">
+              <div ref={dropRef} className="flex flex-col items-start mb-6 p-4 rounded-xl border border-border-default bg-bg-elevated w-full">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-xs text-text-tertiary uppercase tracking-wide">Character Images</span>
                   <label className="px-3 py-2 rounded-md border border-border-default bg-bg-primary text-text-secondary hover:text-text-primary inline-flex items-center gap-2 cursor-pointer">
                     <Upload className="w-4 h-4" />
-                    {(form.images?.[0]) ? "Change Image" : "Upload Image"}
-                    <input type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void onUploadFile(f); }} />
+                    Upload Image
+                    <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => { const files = Array.from(e.target.files || []); if (files.length) { (async () => { await onUploadFiles(files as File[]); })(); } }} />
                   </label>
-                  {(form.images && form.images.length > 0) && (
-                    <button onClick={() => setForm((f)=>({ ...f, images: [] }))} className="text-text-tertiary hover:text-red-400 text-sm inline-flex items-center gap-1">
-                      <X className="w-4 h-4" />
-                      Remove
-                    </button>
+                  {uploading && <div className="text-xs text-text-tertiary inline-flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin" /> Uploading…</div>}
+                  {uploadStatus === 'uploaded' && !uploading && <div className="text-xs text-green-400">Uploaded</div>}
+                  {uploadStatus === 'error' && !uploading && <div className="text-xs text-red-400">Upload failed</div>}
+                  <div className="ml-2 text-[10px] text-text-tertiary">Env: {supaEnvOk ? 'ok' : 'missing'} · Bucket: {charBucketName}</div>
+                </div>
+                <div className="flex gap-2 overflow-x-auto w-full pb-1">
+                  {(form.images || []).map((url, idx) => (
+                    <div key={idx} className="relative border border-border-default rounded-md overflow-hidden bg-bg-primary flex-none w-24 h-24">
+                      <img src={url} alt="character" className="w-full h-full object-cover" />
+                      <button
+                        className="absolute top-1 right-1 bg-black/60 text-white rounded p-1"
+                        title="Remove"
+                        onClick={async () => {
+                          try { console.debug('Removing character image', { charId: activeId, idx }); } catch {}
+                          const removedUrl = (form.images || [])[idx];
+                          const nextImages: string[] = (form.images || []).filter((_,i)=>i!==idx);
+                          setForm((f)=> ({ ...f, images: nextImages }));
+                          if (activeId && activeId !== "__new__") {
+                            try {
+                              const res = await api.updateCharacter(projectId, activeId, { images: nextImages });
+                              setItems((prev) => prev.map((x) => (x.id === res.id ? res : x)));
+                              notify("Image removed");
+                              try { console.debug('Removed character image persisted', { id: res.id, count: nextImages.length }); } catch {}
+                              try {
+                                const parsed = removedUrl ? parseSupabasePublicUrl(removedUrl) : null;
+                                if (parsed) { await supabase.storage.from(parsed.bucket).remove([parsed.path]); }
+                              } catch {}
+                            } catch (e: any) {
+                              notify(e?.message || "Failed to persist removal");
+                              try { console.error('Persist character remove failed', e); } catch {}
+                            }
+                          }
+                        }}
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                  {!(form.images || []).length && (
+                    <div className="text-xs text-text-tertiary">No images yet. Upload or drop here.</div>
                   )}
                 </div>
-                {uploading && <div className="mt-2 text-xs text-text-tertiary inline-flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin" /> Uploading…</div>}
               </div>
 
               <div className="grid gap-4">

@@ -49,9 +49,17 @@ async function main() {
   });
 
   // Seed a sample chat message
-  await prisma.chatMessage.create({
+  const chat = await prisma.chat.create({
     data: {
       projectId: project.id,
+      type: 'plot',
+      title: 'Main Plot',
+    },
+  });
+
+  await prisma.chatMessage.create({
+    data: {
+      chatId: chat.id,
       role: 'user',
       content: 'Generate a mysterious prologue for the manhwa.',
       panelId: chapter.id,

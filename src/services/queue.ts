@@ -2,13 +2,14 @@ import 'dotenv/config';
 import { Queue, Worker, JobsOptions, type Processor } from 'bullmq';
 import IORedis from 'ioredis';
 
+const disabled = (process.env.DISABLE_QUEUE === '1' || process.env.DISABLE_QUEUE === 'true' || process.env.IMAGE_QUEUE_DISABLED === '1' || process.env.IMAGE_QUEUE_DISABLED === 'true');
 const redisUrl = process.env.UPSTASH_REDIS_URL || '';
-if (!redisUrl) {
+if (!redisUrl || disabled) {
   // eslint-disable-next-line no-console
-  console.warn('[queue] UPSTASH_REDIS_URL not set; queueing disabled');
+  console.warn('[queue] Queue disabled (no Redis URL or DISABLE_QUEUE set)');
 }
 
-export const connection = redisUrl
+export const connection = (redisUrl && !disabled)
   ? new IORedis(redisUrl, {
       tls: redisUrl.startsWith('rediss://') ? {} : undefined,
       maxRetriesPerRequest: null,

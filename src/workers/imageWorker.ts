@@ -1,6 +1,5 @@
 import { createWorker } from '../services/queue';
 import { generateImage } from '../services/fal';
-import { prisma } from '../db/prisma';
 
 type FalImageJob = {
   description: string;
@@ -22,20 +21,9 @@ type ImageGenerationJob = {
 const falImageWorker = createWorker<FalImageJob, { url: string }, 'fal-image'>(
   'fal-image',
   async (job) => {
-    const { description, style, userId, projectId, panelId } = job.data;
+    const { description, style } = job.data;
 
     const url = await generateImage(description, { style: style ?? null });
-
-    if (projectId) {
-      await prisma.chatMessage.create({
-        data: {
-          projectId,
-          role: 'assistant',
-          content: url,
-          panelId: panelId ?? null,
-        },
-      });
-    }
 
     return { url };
   }
@@ -44,20 +32,9 @@ const falImageWorker = createWorker<FalImageJob, { url: string }, 'fal-image'>(
 const imageGenerationWorker = createWorker<ImageGenerationJob, { url: string }, 'image-generation'>(
   'image-generation',
   async (job) => {
-    const { prompt, userId, projectId, panelId, style } = job.data;
+    const { prompt, style } = job.data;
 
     const url = await generateImage(prompt, { style: style ?? null });
-
-    if (projectId) {
-      await prisma.chatMessage.create({
-        data: {
-          projectId,
-          role: 'assistant',
-          content: url,
-          panelId: panelId ?? null,
-        },
-      });
-    }
 
     return { url };
   }

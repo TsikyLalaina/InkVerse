@@ -7,12 +7,13 @@ export type ChatBubbleProps = {
   role: 'user' | 'assistant';
   content: string;
   panelId?: string | null;
+  imageUrl?: string;
   onEdit?: () => void;
   onRegenerate?: (panelId: string) => void;
   draggable?: boolean;
 };
 
-export function ChatBubble({ role, content, panelId, onEdit, onRegenerate, draggable }: ChatBubbleProps) {
+export function ChatBubble({ role, content, panelId, imageUrl, onEdit, onRegenerate, draggable }: ChatBubbleProps) {
   const [{ isDragging }, drag] = useDrag(() => ({
     type: 'PANEL',
     item: { panelId },
@@ -21,6 +22,8 @@ export function ChatBubble({ role, content, panelId, onEdit, onRegenerate, dragg
   }), [panelId, draggable]);
 
   const isUser = role === 'user';
+  const looksLikeImageUrl = (s: string) => /^(https?:\/\/).+\.(png|jpg|jpeg|webp|gif)(\?.*)?$/i.test(s.trim());
+  const url = imageUrl || (looksLikeImageUrl(content) ? content : undefined);
 
   return (
     <div
@@ -28,7 +31,16 @@ export function ChatBubble({ role, content, panelId, onEdit, onRegenerate, dragg
       className={`group max-w-3xl ${isUser ? 'ml-auto' : ''} ${isDragging ? 'opacity-60' : ''}`}
     >
       <div className={`rounded-2xl px-4 py-3 whitespace-pre-wrap shadow-sm border ${isUser ? 'bg-accent border-accent text-white' : 'bg-bg-primary border-border-default text-text-primary'}`}>
-        {content}
+        {url ? (
+          <div className="flex flex-col gap-2">
+            <img src={url} alt="generated image" className="max-w-full h-auto rounded-md border border-border-default" />
+            {content && !looksLikeImageUrl(content) && (
+              <div className="text-xs text-text-tertiary break-words">{content}</div>
+            )}
+          </div>
+        ) : (
+          content
+        )}
       </div>
       <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 mt-1">
         {onEdit && (
@@ -36,6 +48,12 @@ export function ChatBubble({ role, content, panelId, onEdit, onRegenerate, dragg
         )}
         {panelId && onRegenerate && (
           <button onClick={() => onRegenerate(panelId)} className="text-xs text-text-tertiary hover:text-text-primary transition-colors duration-150">Regenerate Panel</button>
+        )}
+        {url && (
+          <>
+            <a href={url} target="_blank" rel="noopener noreferrer" className="text-xs text-text-tertiary hover:text-text-primary transition-colors duration-150">View</a>
+            <a href={url} download className="text-xs text-text-tertiary hover:text-text-primary transition-colors duration-150">Download</a>
+          </>
         )}
       </div>
     </div>
