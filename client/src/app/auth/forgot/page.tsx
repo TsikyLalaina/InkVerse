@@ -1,5 +1,7 @@
 "use client";
 
+export const dynamic = 'force-dynamic';
+
 import { useState } from "react";
 import SystemWindow from "@/components/SystemWindow";
 import PortalBackground from "@/components/PortalBackground";

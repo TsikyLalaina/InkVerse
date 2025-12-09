@@ -1,5 +1,7 @@
 "use client";
 
+export const dynamic = 'force-dynamic';
+
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Download, GitBranch, FolderOpen, Share2, BookOpen, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
