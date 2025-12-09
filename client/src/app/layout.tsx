@@ -1,7 +1,7 @@
 import './globals.css';
 import type { Metadata } from 'next';
 import { RegisterSW } from '@/components/pwa/RegisterSW';
-import dynamic from 'next/dynamic';
+import nextDynamic from 'next/dynamic';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +15,7 @@ export const viewport = {
   themeColor: '#0f172a',
 };
 
-const SupabaseProvider = dynamic(
+const SupabaseProvider = nextDynamic(
   () => import('@/components/providers/SupabaseProvider').then((m) => m.SupabaseProvider),
   { ssr: false }
 );
