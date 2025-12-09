@@ -12,24 +12,21 @@ declare global {
 
 export function SupabaseProvider({ children }: { children: React.ReactNode }) {
   const supabase = useMemo(() => {
+    // Avoid initializing Supabase on the server (build/SSR). Return a harmless stub.
+    if (typeof window === 'undefined') {
+      return ({} as SupabaseClient);
+    }
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
     if (!url || !anon) {
-      if (typeof window !== 'undefined') {
-        console.warn('Supabase env is missing in NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY');
-      }
+      console.warn('Supabase env is missing in NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY');
+      // Provide a stub so hydration can proceed; actual calls will fail until envs are configured.
+      return ({} as SupabaseClient);
     }
-    if (typeof window !== 'undefined') {
-      if (!window.__supabase__) {
-        window.__supabase__ = createClient(url || '', anon || '');
-      }
-      return window.__supabase__;
+    if (!window.__supabase__) {
+      window.__supabase__ = createClient(url, anon);
     }
-    // Fallback (should not happen in client component SSR path)
-    if (!globalThis.__supabase__) {
-      globalThis.__supabase__ = createClient(url || '', anon || '');
-    }
-    return globalThis.__supabase__;
+    return window.__supabase__;
   }, []);
 
   return <SupabaseCtx.Provider value={supabase}>{children}</SupabaseCtx.Provider>;

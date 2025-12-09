@@ -1,7 +1,9 @@
 import './globals.css';
 import type { Metadata } from 'next';
-import { SupabaseProvider } from '@/components/providers/SupabaseProvider';
 import { RegisterSW } from '@/components/pwa/RegisterSW';
+import dynamic from 'next/dynamic';
+
+export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
   title: 'InkVerse',
@@ -12,6 +14,11 @@ export const metadata: Metadata = {
 export const viewport = {
   themeColor: '#0f172a',
 };
+
+const SupabaseProvider = dynamic(
+  () => import('@/components/providers/SupabaseProvider').then((m) => m.SupabaseProvider),
+  { ssr: false }
+);
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
