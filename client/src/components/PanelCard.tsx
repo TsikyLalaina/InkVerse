@@ -46,7 +46,7 @@ export function PanelCard({
     collect: (monitor: DragSourceMonitor) => ({ isDragging: monitor.isDragging() })
   }), [panelId]);
 
-  const apiBase = useMemo(() => process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000', []);
+  const apiBase = useMemo(() => (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, ''), []);
 
   async function handleSave() {
     const parsed = schema.safeParse({ description });

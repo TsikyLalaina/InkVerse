@@ -570,7 +570,7 @@ function RightControls({ sort, onSort, view, onView, dark, onDark }: { sort: "re
 
 function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: string; initialMode: "novel" | "manhwa"; onClose: () => void; }) {
   const supabase = useSupabase();
-  const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+  const apiBase = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, '');
   const [mode, setMode] = useState<"novel" | "manhwa">(initialMode);
   const [chapters, setChapters] = useState<Array<{ id: string; title: string }>>([]);
   const [activeCh, setActiveCh] = useState<string | null>(null);

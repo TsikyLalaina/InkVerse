@@ -37,7 +37,7 @@ export function Chat({ chatId, projectId, chatType = 'plot', initialMessages = [
   const [toastMsg, setToastMsg] = useState<string>('');
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+  const apiBase = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, '');
 
   const [loadingHistory, setLoadingHistory] = useState<boolean>(false);
   const [clientMode, setClientMode] = useState<'chat' | 'action'>('chat');

@@ -35,7 +35,7 @@ app.register(async (instance) => {
 app
   .listen({ port, host: '0.0.0.0' })
   .then(() => {
-    app.log.info(`Server listening on http://localhost:${port}`);
+    app.log.info(`Server listening on 0.0.0.0:${port}`);
   })
   .catch((err) => {
     app.log.error(err);

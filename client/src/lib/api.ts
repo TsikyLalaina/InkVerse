@@ -3,7 +3,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { useCallback, useRef, useState } from 'react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, '');
 
 async function authHeaders(supabase: SupabaseClient) {
   const { data: { session } } = await supabase.auth.getSession();
