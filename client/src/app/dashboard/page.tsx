@@ -15,6 +15,7 @@ type ProjectItem = {
   description?: string | null;
   createdAt: string;
   mode?: "novel" | "manhwa" | "convert";
+  coverImage?: string | null;
 };
 
 type Mode = "CREATE" | "READER";
@@ -34,13 +35,20 @@ export default function DashboardPage() {
   const [authChecked, setAuthChecked] = useState(false);
   const [readerSort, setReaderSort] = useState<"recent" | "rank">("recent");
   const [readerView, setReaderView] = useState<"list" | "gallery">("list");
-  const [themeDark, setThemeDark] = useState(true);
+  const [readerModeFilter, setReaderModeFilter] = useState<'all' | 'novel' | 'manhwa'>('all');
+  const [readerRankFilter, setReaderRankFilter] = useState<'all' | 'S' | 'A' | 'B' | 'C'>('all');
+  const [readerTimeFilter, setReaderTimeFilter] = useState<'all' | '7d' | '30d'>('all');
   const [readerOpen, setReaderOpen] = useState<{ projectId: string; mode: "novel" | "manhwa" } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createTitle, setCreateTitle] = useState("");
   const [createDesc, setCreateDesc] = useState("");
   const [createErr, setCreateErr] = useState<string | null>(null);
   const [createLoading, setCreateLoading] = useState(false);
+  const [userStats, setUserStats] = useState<any>(null);
+  const [exportDialog, setExportDialog] = useState<{ projectId: string; title: string } | null>(null);
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportAllDialog, setExportAllDialog] = useState(false);
+  const [exportAllLoading, setExportAllLoading] = useState(false);
 
   const onSignOut = async () => {
     try {
@@ -71,9 +79,16 @@ export default function DashboardPage() {
       try {
         setLoading(true);
         setError(null);
+        
+        // First, sync stats from database records (retroactive calculation)
+        const syncedStats = await api.syncUserStats().catch(() => null);
+        
+        // Then fetch projects and use synced stats
         const list = await api.listProjects();
+        
         if (!mounted) return;
         setProjects(list as ProjectItem[]);
+        if (syncedStats) setUserStats(syncedStats);
       } catch (e: any) {
         if (!mounted) return;
         setError(e?.message || "Failed to load projects");
@@ -91,6 +106,34 @@ export default function DashboardPage() {
       p.title.toLowerCase().includes(q) || (p.description || "").toLowerCase().includes(q)
     );
   }, [projects, query]);
+
+  // Reader-mode specific filtered list (query + mode + rank + timeframe)
+  const readerFiltered = useMemo(() => {
+    let list = projects;
+    // Optional: reuse query if present
+    if (query.trim()) {
+      const q = query.toLowerCase();
+      list = list.filter(p => p.title.toLowerCase().includes(q) || (p.description || "").toLowerCase().includes(q));
+    }
+    // Mode filter
+    if (readerModeFilter !== 'all') {
+      list = list.filter(p => (p.mode || 'novel') === readerModeFilter);
+    }
+    // Rank filter
+    if (readerRankFilter !== 'all') {
+      list = list.filter(p => rankForProject(p.id) === readerRankFilter);
+    }
+    // Time filter
+    if (readerTimeFilter !== 'all') {
+      const now = Date.now();
+      const maxAge = readerTimeFilter === '7d' ? 7 : 30; // days
+      list = list.filter(p => {
+        const t = new Date(p.createdAt).getTime();
+        return (now - t) <= maxAge * 24 * 60 * 60 * 1000;
+      });
+    }
+    return list;
+  }, [projects, query, readerModeFilter, readerRankFilter, readerTimeFilter]);
 
   const startCreate = useCallback(() => {
     setCreateTitle("");
@@ -129,8 +172,104 @@ export default function DashboardPage() {
   }, []);
 
   const handleExport = useCallback((id: string) => {
-    void id; /* placeholder */
-  }, []);
+    const project = projects.find(p => p.id === id);
+    if (project) {
+      setExportDialog({ projectId: id, title: project.title });
+    }
+  }, [projects]);
+
+  const performExport = useCallback(async (format: 'json' | 'markdown' | 'text') => {
+    if (!exportDialog) return;
+    try {
+      setExportLoading(true);
+      const content = await api.exportProject(exportDialog.projectId, format);
+      
+      // Determine file extension and MIME type
+      const extensions: Record<string, { ext: string; type: string }> = {
+        json: { ext: 'json', type: 'application/json' },
+        markdown: { ext: 'md', type: 'text/markdown' },
+        text: { ext: 'txt', type: 'text/plain' },
+      };
+      const { ext, type } = extensions[format];
+      const filename = `${exportDialog.title}.${ext}`;
+      
+      // Create blob and download
+      const blob = new Blob([content], { type });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      setExportDialog(null);
+    } catch (err) {
+      console.error('Export failed:', err);
+      alert('Failed to export project');
+    } finally {
+      setExportLoading(false);
+    }
+  }, [api, exportDialog]);
+
+  const performExportAll = useCallback(async (format: 'json' | 'markdown' | 'text') => {
+    try {
+      setExportAllLoading(true);
+      
+      // Export all projects and create a zip-like structure
+      const allContent: Record<string, string> = {};
+      
+      for (const project of projects) {
+        const content = await api.exportProject(project.id, format);
+        const ext = format === 'json' ? 'json' : format === 'markdown' ? 'md' : 'txt';
+        allContent[`${project.title}.${ext}`] = content;
+      }
+      
+      // Create a combined file with all projects
+      let combinedContent = '';
+      
+      if (format === 'json') {
+        // For JSON, create an array of all projects
+        const allProjects = Object.entries(allContent).map(([filename, content]) => ({
+          filename,
+          data: JSON.parse(content),
+        }));
+        combinedContent = JSON.stringify(allProjects, null, 2);
+      } else {
+        // For markdown and text, concatenate all with separators
+        const separator = format === 'markdown' ? '\n\n---\n\n' : '\n\n' + '='.repeat(80) + '\n\n';
+        combinedContent = Object.entries(allContent)
+          .map(([filename, content]) => {
+            const header = format === 'markdown' ? `# ${filename}\n\n` : `${filename}\n${'-'.repeat(filename.length)}\n\n`;
+            return header + content;
+          })
+          .join(separator);
+      }
+      
+      // Download combined file
+      const ext = format === 'json' ? 'json' : format === 'markdown' ? 'md' : 'txt';
+      const filename = `InkVerse-Export-${new Date().toISOString().split('T')[0]}.${ext}`;
+      const type = format === 'json' ? 'application/json' : format === 'markdown' ? 'text/markdown' : 'text/plain';
+      
+      const blob = new Blob([combinedContent], { type });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      setExportAllDialog(false);
+    } catch (err) {
+      console.error('Export all failed:', err);
+      alert('Failed to export all projects');
+    } finally {
+      setExportAllLoading(false);
+    }
+  }, [api, projects]);
 
   const handleRead = useCallback((id: string, m?: ProjectItem["mode"]) => {
     setReaderOpen({ projectId: id, mode: m === "manhwa" ? "manhwa" : "novel" });
@@ -145,10 +284,10 @@ export default function DashboardPage() {
         <div className="pointer-events-none absolute inset-0 opacity-30" style={{ backgroundImage: `linear-gradient(rgba(0,255,255,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(0,255,255,0.06) 1px, transparent 1px)`, backgroundSize: "32px 32px" }} />
       )}
       <div className="relative">
-        <TopBar mode={mode} onModeChange={setMode} userInitial={userInitial} onSignOut={onSignOut} />
+        <TopBar mode={mode} onModeChange={setMode} userInitial={userInitial} onSignOut={onSignOut} userStats={userStats} />
         {mode === "CREATE" ? (
           <MainLayout>
-            <LeftStats projectsCount={projects.length} />
+            <LeftStats projectsCount={projects.length} stats={userStats} />
             <CenterProjects
               items={filtered}
               loading={loading}
@@ -172,7 +311,7 @@ export default function DashboardPage() {
               query={query}
               onQuery={setQuery}
               onCreate={startCreate}
-              onExportAll={() => {}}
+              onExportAll={() => setExportAllDialog(true)}
               overlay={overlay}
               onToggleOverlay={() => setOverlay(v => !v)}
             />
@@ -180,12 +319,17 @@ export default function DashboardPage() {
         ) : (
           <MainLayout>
             <LeftLibrary
-              sort={readerSort}
-              onSort={setReaderSort}
+              modeFilter={readerModeFilter}
+              onModeFilter={setReaderModeFilter}
+              rankFilter={readerRankFilter}
+              onRankFilter={setReaderRankFilter}
+              timeFilter={readerTimeFilter}
+              onTimeFilter={setReaderTimeFilter}
             />
             <ReaderCenterVault
-              items={filtered}
+              items={readerFiltered}
               sort={readerSort}
+              view={readerView}
               onRead={handleRead}
             />
             <RightControls
@@ -193,8 +337,6 @@ export default function DashboardPage() {
               onSort={setReaderSort}
               view={readerView}
               onView={setReaderView}
-              dark={themeDark}
-              onDark={setThemeDark}
             />
           </MainLayout>
         )}
@@ -217,14 +359,128 @@ export default function DashboardPage() {
             onSubmit={submitCreate}
           />
         )}
+        {exportDialog && (
+          <ExportDialog
+            projectTitle={exportDialog.title}
+            loading={exportLoading}
+            onExport={performExport}
+            onClose={() => !exportLoading && setExportDialog(null)}
+          />
+        )}
+        {exportAllDialog && (
+          <ExportAllDialog
+            projectCount={projects.length}
+            loading={exportAllLoading}
+            onExport={performExportAll}
+            onClose={() => !exportAllLoading && setExportAllDialog(false)}
+          />
+        )}
       </div>
     </div>
   );
 }
 
-function TopBar({ mode, onModeChange, userInitial, onSignOut }: { mode: Mode; onModeChange: (m: Mode) => void; userInitial: string; onSignOut: () => void; }) {
+function ExportDialog({ projectTitle, loading, onExport, onClose }: { projectTitle: string; loading: boolean; onExport: (format: 'json' | 'markdown' | 'text') => void; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+      <div className="rounded-lg border border-border-default bg-bg-elevated p-6 shadow-lg max-w-sm w-full mx-4">
+        <h2 className="text-lg font-semibold text-text-primary mb-4">Export "{projectTitle}"</h2>
+        <p className="text-sm text-text-secondary mb-6">Choose export format:</p>
+        
+        <div className="space-y-3 mb-6">
+          <button
+            onClick={() => onExport('markdown')}
+            disabled={loading}
+            className="w-full rounded-md border border-border-default bg-bg-primary px-4 py-3 text-sm text-text-primary hover:bg-bg-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-left font-medium"
+          >
+            📝 Markdown (.md)
+            <div className="text-xs text-text-tertiary mt-1">Formatted text with sections</div>
+          </button>
+          
+          <button
+            onClick={() => onExport('json')}
+            disabled={loading}
+            className="w-full rounded-md border border-border-default bg-bg-primary px-4 py-3 text-sm text-text-primary hover:bg-bg-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-left font-medium"
+          >
+            {} JSON (.json)
+            <div className="text-xs text-text-tertiary mt-1">Structured data format</div>
+          </button>
+          
+          <button
+            onClick={() => onExport('text')}
+            disabled={loading}
+            className="w-full rounded-md border border-border-default bg-bg-primary px-4 py-3 text-sm text-text-primary hover:bg-bg-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-left font-medium"
+          >
+            📄 Plain Text (.txt)
+            <div className="text-xs text-text-tertiary mt-1">Universal text format</div>
+          </button>
+        </div>
+        
+        <button
+          onClick={onClose}
+          disabled={loading}
+          className="w-full rounded-md border border-border-default px-4 py-2 text-sm text-text-secondary hover:bg-bg-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ExportAllDialog({ projectCount, loading, onExport, onClose }: { projectCount: number; loading: boolean; onExport: (format: 'json' | 'markdown' | 'text') => void; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+      <div className="rounded-lg border border-border-default bg-bg-elevated p-6 shadow-lg max-w-sm w-full mx-4">
+        <h2 className="text-lg font-semibold text-text-primary mb-2">Export All Projects</h2>
+        <p className="text-sm text-text-tertiary mb-6">{projectCount} project{projectCount !== 1 ? 's' : ''} will be exported</p>
+        <p className="text-sm text-text-secondary mb-6">Choose export format:</p>
+        
+        <div className="space-y-3 mb-6">
+          <button
+            onClick={() => onExport('markdown')}
+            disabled={loading}
+            className="w-full rounded-md border border-border-default bg-bg-primary px-4 py-3 text-sm text-text-primary hover:bg-bg-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-left font-medium"
+          >
+            📝 Markdown (.md)
+            <div className="text-xs text-text-tertiary mt-1">Single file with all projects</div>
+          </button>
+          
+          <button
+            onClick={() => onExport('json')}
+            disabled={loading}
+            className="w-full rounded-md border border-border-default bg-bg-primary px-4 py-3 text-sm text-text-primary hover:bg-bg-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-left font-medium"
+          >
+            {} JSON (.json)
+            <div className="text-xs text-text-tertiary mt-1">Structured data format</div>
+          </button>
+          
+          <button
+            onClick={() => onExport('text')}
+            disabled={loading}
+            className="w-full rounded-md border border-border-default bg-bg-primary px-4 py-3 text-sm text-text-primary hover:bg-bg-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-left font-medium"
+          >
+            📄 Plain Text (.txt)
+            <div className="text-xs text-text-tertiary mt-1">Universal text format</div>
+          </button>
+        </div>
+        
+        <button
+          onClick={onClose}
+          disabled={loading}
+          className="w-full rounded-md border border-border-default px-4 py-2 text-sm text-text-secondary hover:bg-bg-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TopBar({ mode, onModeChange, userInitial, onSignOut, userStats }: { mode: Mode; onModeChange: (m: Mode) => void; userInitial: string; onSignOut: () => void; userStats?: any }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const level = userStats?.level || 1;
   useEffect(() => {
     function onDoc(e: MouseEvent) {
       if (!menuRef.current) return;
@@ -248,7 +504,7 @@ function TopBar({ mode, onModeChange, userInitial, onSignOut }: { mode: Mode; on
           >READER</button>
         </div>
         <div className="relative flex items-center gap-3" ref={menuRef}>
-          <div className="text-xs text-text-tertiary">Level 7</div>
+          <div className="text-xs text-text-tertiary">Level {level}</div>
           <button className="size-8 rounded-full bg-accent text-black grid place-items-center font-semibold hover:bg-accent-hover transition-micro" onClick={() => setOpen(v => !v)} aria-haspopup="menu" aria-expanded={open}>
             {userInitial}
           </button>
@@ -276,23 +532,30 @@ function MainLayout({ children }: { children: React.ReactNode }) {
   );
 }
 
-function LeftStats({ projectsCount }: { projectsCount: number }) {
+function LeftStats({ projectsCount, stats }: { projectsCount: number; stats: any }) {
+  const level = stats?.level || 1;
+  const currentExp = stats?.currentLevelExp || 0;
+  const nextExp = stats?.nextLevelExp || 100;
+  const progressPercent = stats?.progressPercent || 0;
+  const chaptersCount = stats?.chaptersCreated || 0;
+  const wordsCount = stats?.totalWordsWritten || 0;
+
   return (
     <aside className="md:basis-1/5 bg-bg-elevated border border-border-default rounded-xl p-6 h-fit shadow-elevation">
       <div className="text-sm font-semibold mb-4 tracking-elegant">STATS</div>
       <div className="space-y-3 text-sm">
-        <div className="flex items-center justify-between"><span className="text-text-secondary">Level</span><span className="text-text-primary">7</span></div>
-        <div className="flex items-center justify-between"><span className="text-text-secondary">EXP</span><span className="text-text-primary">420/1k</span></div>
+        <div className="flex items-center justify-between"><span className="text-text-secondary">Level</span><span className="text-text-primary">{level}</span></div>
+        <div className="flex items-center justify-between"><span className="text-text-secondary">EXP</span><span className="text-text-primary">{currentExp}/{nextExp}</span></div>
         <div className="mt-2">
           <div className="h-2.5 w-full bg-bg-hover rounded-full overflow-hidden relative">
-            <div className="h-full bg-accent transition-all duration-300 relative overflow-hidden" style={{ width: "42%" }}>
+            <div className="h-full bg-accent transition-all duration-300 relative overflow-hidden" style={{ width: `${progressPercent}%` }}>
               <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" />
             </div>
           </div>
         </div>
         <div className="flex items-center justify-between"><span className="text-text-secondary">Projects</span><span className="text-text-primary">{projectsCount}</span></div>
-        <div className="flex items-center justify-between"><span className="text-text-secondary">Chapters</span><span className="text-text-primary">—</span></div>
-        <div className="flex items-center justify-between"><span className="text-text-secondary">Words</span><span className="text-text-primary">—</span></div>
+        <div className="flex items-center justify-between"><span className="text-text-secondary">Chapters</span><span className="text-text-primary">{chaptersCount}</span></div>
+        <div className="flex items-center justify-between"><span className="text-text-secondary">Words</span><span className="text-text-primary">{wordsCount}</span></div>
       </div>
     </aside>
   );
@@ -347,9 +610,13 @@ const ProjectCard = memo(function ProjectCard({ item, onOpen, onBranch, onExport
       <div className="text-xs text-text-tertiary">{meta}</div>
       <div className="mt-6 grid grid-cols-[minmax(160px,200px)_1fr] gap-6 items-start">
         <div className="relative w-full pt-[133%] overflow-hidden rounded-lg border border-border-default bg-bg-primary group-hover:border-accent/30 transition-colors">
-          <div className="absolute inset-0 flex items-center justify-center">
-            <BookOpen className="w-12 h-12 text-text-tertiary/30" />
-          </div>
+          {item.coverImage ? (
+            <img src={item.coverImage} alt={item.title} className="absolute inset-0 w-full h-full object-cover" />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <BookOpen className="w-12 h-12 text-text-tertiary/30" />
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-3">
           <button onClick={() => onOpen(item.id)} className="rounded-md bg-accent px-3 py-2 text-sm font-semibold text-black hover:bg-accent-hover hover:scale-105 transition-all duration-micro inline-flex items-center gap-1" title="Open">
@@ -360,7 +627,7 @@ const ProjectCard = memo(function ProjectCard({ item, onOpen, onBranch, onExport
             <GitBranch className="w-4 h-4" aria-hidden="true" />
             <span className="sr-only">Branch</span>
           </button>
-          <button onClick={() => onExport(item.id)} className="rounded-md border border-border-default px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:scale-105 transition-all duration-micro inline-flex items-center gap-1" disabled title="Export (coming soon)">
+          <button onClick={() => onExport(item.id)} className="rounded-md border border-border-default px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:scale-105 transition-all duration-micro inline-flex items-center gap-1" title="Export as Markdown">
             <Download className="w-4 h-4" aria-hidden="true" />
             <span className="sr-only">Export</span>
           </button>
@@ -394,7 +661,7 @@ const RightActions = memo(function RightActions({ query, onQuery, onCreate, onEx
         placeholder="Search"
         className="w-full rounded-md bg-bg-primary border border-border-default px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent transition-colors duration-micro"
       />
-      <button className="w-full rounded-md border border-border-default px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:scale-[1.02] transition-all duration-micro inline-flex items-center justify-center gap-2" onClick={onExportAll} disabled title="Export All (coming soon)">
+      <button className="w-full rounded-md border border-border-default px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:scale-[1.02] transition-all duration-micro inline-flex items-center justify-center gap-2" onClick={onExportAll} title="Export all projects">
         <Download className="w-4 h-4" aria-hidden="true" />
         <span>Export All</span>
       </button>
@@ -406,24 +673,45 @@ const RightActions = memo(function RightActions({ query, onQuery, onCreate, onEx
   );
 });
 
-function LeftLibrary({ sort, onSort }: { sort: "recent" | "rank"; onSort: (s: "recent" | "rank") => void; }) {
+function LeftLibrary({ modeFilter, onModeFilter, rankFilter, onRankFilter, timeFilter, onTimeFilter }: {
+  modeFilter: 'all' | 'novel' | 'manhwa';
+  onModeFilter: (m: 'all' | 'novel' | 'manhwa') => void;
+  rankFilter: 'all' | 'S' | 'A' | 'B' | 'C';
+  onRankFilter: (r: 'all' | 'S' | 'A' | 'B' | 'C') => void;
+  timeFilter: 'all' | '7d' | '30d';
+  onTimeFilter: (t: 'all' | '7d' | '30d') => void;
+}) {
   return (
     <aside className="md:basis-1/5 bg-bg-elevated border border-border-default rounded-xl p-6 h-fit space-y-4 shadow-elevation">
-      <div className="text-sm font-semibold tracking-elegant">LIBRARY</div>
-      <div className="text-xs text-text-tertiary">Filter</div>
-      <select className="w-full rounded-md bg-bg-primary border border-border-default px-3 py-2 text-sm text-text-primary focus:border-accent transition-colors duration-micro">
-        <option>All</option>
+      <div className="text-sm font-semibold tracking-elegant">FILTERS</div>
+      
+      <div className="text-xs text-text-tertiary">Mode</div>
+      <select value={modeFilter} onChange={(e) => onModeFilter(e.target.value as any)} className="w-full rounded-md bg-bg-primary border border-border-default px-3 py-2 text-sm text-text-primary focus:border-accent transition-colors duration-micro">
+        <option value="all">All Modes</option>
+        <option value="novel">Novel</option>
+        <option value="manhwa">Manhwa</option>
       </select>
-      <div className="text-xs text-text-tertiary">Sort</div>
-      <select value={sort} onChange={(e) => onSort(e.target.value as any)} className="w-full rounded-md bg-bg-primary border border-border-default px-3 py-2 text-sm text-text-primary focus:border-accent transition-colors duration-micro">
-        <option value="recent">Recent</option>
-        <option value="rank">Rank</option>
+      
+      <div className="text-xs text-text-tertiary">Rank</div>
+      <select value={rankFilter} onChange={(e) => onRankFilter(e.target.value as any)} className="w-full rounded-md bg-bg-primary border border-border-default px-3 py-2 text-sm text-text-primary focus:border-accent transition-colors duration-micro">
+        <option value="all">All Ranks</option>
+        <option value="S">S</option>
+        <option value="A">A</option>
+        <option value="B">B</option>
+        <option value="C">C</option>
+      </select>
+      
+      <div className="text-xs text-text-tertiary">Time</div>
+      <select value={timeFilter} onChange={(e) => onTimeFilter(e.target.value as any)} className="w-full rounded-md bg-bg-primary border border-border-default px-3 py-2 text-sm text-text-primary focus:border-accent transition-colors duration-micro">
+        <option value="all">All Time</option>
+        <option value="7d">Last 7 days</option>
+        <option value="30d">Last 30 days</option>
       </select>
     </aside>
   );
 }
 
-function ReaderCenterVault({ items, sort, onRead }: { items: ProjectItem[]; sort: "recent" | "rank"; onRead: (id: string, mode?: ProjectItem["mode"]) => void; }) {
+function ReaderCenterVault({ items, sort, view, onRead }: { items: ProjectItem[]; sort: "recent" | "rank"; view: "list" | "gallery"; onRead: (id: string, mode?: ProjectItem["mode"]) => void; }) {
   const [visible, setVisible] = useState(10);
 
   const sorted = useMemo(() => {
@@ -451,10 +739,12 @@ function ReaderCenterVault({ items, sort, onRead }: { items: ProjectItem[]; sort
       <div className="mb-3">
         <div className="text-sm font-semibold tracking-elegant">STORY VAULT</div>
       </div>
-      <div onScroll={onScroll} className="h-[calc(100vh-14rem)] md:h-[calc(100vh-12rem)] overflow-y-auto pr-1 md:pr-2 space-y-4">
-        {sorted.slice(0, visible).map((p) => (
-          <ReaderCard key={p.id} item={p} onRead={onRead} />
-        ))}
+      <div onScroll={onScroll} className="h-[calc(100vh-14rem)] md:h-[calc(100vh-12rem)] overflow-y-auto pr-1 md:pr-2">
+        <div className={view === 'gallery' ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4' : 'space-y-4'}>
+          {sorted.slice(0, visible).map((p) => (
+            <ReaderCard key={p.id} item={p} onRead={onRead} view={view} />
+          ))}
+        </div>
         {visible < sorted.length && (
           <div className="py-4 text-center text-sm text-text-secondary">Loading more…</div>
         )}
@@ -472,7 +762,7 @@ function ReaderCenterVault({ items, sort, onRead }: { items: ProjectItem[]; sort
   );
 }
 
-const ReaderCard = memo(function ReaderCard({ item, onRead }: { item: ProjectItem; onRead: (id: string, mode?: ProjectItem["mode"]) => void; }) {
+const ReaderCard = memo(function ReaderCard({ item, onRead, view }: { item: ProjectItem; onRead: (id: string, mode?: ProjectItem["mode"]) => void; view: "list" | "gallery"; }) {
   const supabase = useSupabase();
   const api = useMemo(() => createApi(supabase), [supabase]);
   const [chaptersCount, setChaptersCount] = useState<number | null>(null);
@@ -515,6 +805,39 @@ const ReaderCard = memo(function ReaderCard({ item, onRead }: { item: ProjectIte
     B: 'bg-success text-black',
     C: 'bg-text-tertiary text-white'
   };
+
+  // Gallery view: compact card
+  if (view === 'gallery') {
+    return (
+      <div ref={cardRef} className="rounded-xl border border-border-default bg-bg-elevated overflow-hidden hover:shadow-elevation hover:scale-[1.02] transition-all duration-micro flex flex-col">
+        <div className="relative w-full pt-[133%] overflow-hidden bg-bg-primary">
+          {item.coverImage ? (
+            <img src={item.coverImage} alt={item.title} className="absolute inset-0 w-full h-full object-cover" />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <BookOpen className="w-12 h-12 text-text-tertiary/30" />
+            </div>
+          )}
+        </div>
+        <div className="p-4 flex flex-col gap-3 flex-1">
+          <div className="flex items-start gap-2">
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-text-primary truncate">{item.title}</div>
+              <div className="text-xs text-text-tertiary">{labelMode(item.mode)}</div>
+            </div>
+            <span className={`px-2 py-0.5 rounded text-xs font-bold flex-shrink-0 ${rankColors[rank]}`}>{rank}</span>
+          </div>
+          <div className="text-xs text-text-secondary">{chaptersCount !== null ? `${chaptersCount} Chapters` : "—"}</div>
+          <button onClick={() => onRead(item.id, item.mode)} className="w-full rounded-md bg-accent px-3 py-2 text-xs font-semibold text-black hover:bg-accent-hover transition-all duration-micro inline-flex items-center justify-center gap-1 mt-auto">
+            <BookOpen className="w-3 h-3" aria-hidden="true" />
+            <span>Read</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // List view: full details
   return (
     <div ref={cardRef} className="rounded-xl border border-border-default bg-bg-elevated p-6 hover:shadow-elevation hover:scale-[1.01] transition-all duration-micro">
       <div className="flex items-center gap-2 mb-1">
@@ -524,9 +847,13 @@ const ReaderCard = memo(function ReaderCard({ item, onRead }: { item: ProjectIte
       <div className="text-xs text-text-tertiary">{labelMode(item.mode)} • {chaptersCount !== null ? `${chaptersCount} Chapters` : "Chapters —"}</div>
       <div className="mt-6 grid grid-cols-[minmax(160px,200px)_1fr] gap-6 items-start">
         <div className="relative w-full pt-[133%] overflow-hidden rounded-lg border border-border-default bg-bg-primary">
-          <div className="absolute inset-0 flex items-center justify-center">
-            <BookOpen className="w-12 h-12 text-text-tertiary/30" />
-          </div>
+          {item.coverImage ? (
+            <img src={item.coverImage} alt={item.title} className="absolute inset-0 w-full h-full object-cover" />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <BookOpen className="w-12 h-12 text-text-tertiary/30" />
+            </div>
+          )}
         </div>
         <div className="flex flex-col gap-3">
           <div className="text-sm text-text-secondary leading-relaxed">{snippet || "No preview available."}</div>
@@ -546,7 +873,7 @@ const ReaderCard = memo(function ReaderCard({ item, onRead }: { item: ProjectIte
   );
 });
 
-function RightControls({ sort, onSort, view, onView, dark, onDark }: { sort: "recent" | "rank"; onSort: (s: "recent" | "rank") => void; view: "list" | "gallery"; onView: (v: "list" | "gallery") => void; dark: boolean; onDark: (v: boolean) => void; }) {
+function RightControls({ sort, onSort, view, onView }: { sort: "recent" | "rank"; onSort: (s: "recent" | "rank") => void; view: "list" | "gallery"; onView: (v: "list" | "gallery") => void; }) {
   return (
     <aside className="md:basis-1/5 bg-bg-elevated border border-border-default rounded-xl p-6 h-fit space-y-4 shadow-elevation">
       <div className="text-sm font-semibold tracking-elegant">CONTROLS</div>
@@ -560,10 +887,7 @@ function RightControls({ sort, onSort, view, onView, dark, onDark }: { sort: "re
         <button onClick={() => onView("list")} className={`flex-1 rounded-md px-3 py-2 text-sm border transition-all duration-micro ${view === "list" ? "bg-accent text-black border-accent" : "border-border-default text-text-secondary hover:bg-bg-hover"}`}>List</button>
         <button onClick={() => onView("gallery")} className={`flex-1 rounded-md px-3 py-2 text-sm border transition-all duration-micro ${view === "gallery" ? "bg-accent text-black border-accent" : "border-border-default text-text-secondary hover:bg-bg-hover"}`}>Gallery</button>
       </div>
-      <label className="flex items-center gap-2 text-xs text-text-secondary pt-1">
-        <input type="checkbox" checked={dark} onChange={(e) => onDark(e.target.checked)} className="accent-accent" />
-        Dark Mode
-      </label>
+      {/* Dark mode toggle removed */}
     </aside>
   );
 }
@@ -574,27 +898,53 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
   const [mode, setMode] = useState<"novel" | "manhwa">(initialMode);
   const [chapters, setChapters] = useState<Array<{ id: string; title: string }>>([]);
   const [activeCh, setActiveCh] = useState<string | null>(null);
-  const [progress, setProgress] = useState(45);
+  const [targetCh, setTargetCh] = useState<string | null>(null);
+  const [progress, setProgress] = useState(0);
   const [fs, setFs] = useState(false);
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [panelIdx, setPanelIdx] = useState(0);
+  const [panelTotal, setPanelTotal] = useState(0);
+  const [chapterIdx, setChapterIdx] = useState(0);
+  const [targetPanelIdx, setTargetPanelIdx] = useState<number | null>(null);
+  const [bookmarks, setBookmarks] = useState<Array<{ id: string; name: string; description?: string; progress: number; updatedAt: string }>>([]);
+  const [bookmarkLoading, setBookmarkLoading] = useState(false);
+  const [editingBookmarkId, setEditingBookmarkId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [savingBookmarkId, setSavingBookmarkId] = useState<string | null>(null);
+  const [deletingBookmarkId, setDeletingBookmarkId] = useState<string | null>(null);
+  const [targetScrollPct, setTargetScrollPct] = useState<number | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        const token = session?.access_token;
-        const res = await fetch(`${apiBase}/api/project/${projectId}`, { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
-        if (!res.ok) return;
-        const data = await res.json();
-        const ch = Array.isArray(data?.chapters) ? data.chapters : [];
+        // Load full chapter list in ascending order
+        const api = createApi(supabase);
+        const first = await api.listChaptersPaginated(projectId, 0, 100);
         if (!mounted) return;
-        setChapters(ch.map((c: any) => ({ id: c.id, title: c.title })));
-        setActiveCh(ch[0]?.id || null);
+        let all = first.items as Array<{ id: string; title: string }>;
+        const total = typeof first.total === 'number' ? first.total : all.length;
+        let page = 1;
+        while (all.length < total) {
+          const next = await api.listChaptersPaginated(projectId, page, 100);
+          all = all.concat(next.items as Array<{ id: string; title: string }>);
+          page += 1;
+          if (!mounted) return;
+        }
+        setChapters(all.map((c: any) => ({ id: c.id, title: c.title })));
+        setActiveCh(all[0]?.id || null);
+        // Load bookmarks
+        try {
+          const bms = await api.listBookmarks(projectId);
+          if (mounted) setBookmarks(bms);
+        } catch {}
       } catch {}
     })();
     return () => { mounted = false; };
-  }, [apiBase, projectId, supabase]);
+  }, [projectId, supabase]);
 
   const toggleFs = async () => {
     try {
@@ -617,6 +967,10 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
             <button className={`px-3 py-1 rounded-full transition-micro ${mode === 'novel' ? 'bg-accent text-black font-semibold' : 'text-text-secondary hover:text-text-primary'}`} onClick={() => setMode('novel')}>Novel</button>
             <button className={`px-3 py-1 rounded-full transition-micro ${mode === 'manhwa' ? 'bg-accent text-black font-semibold' : 'text-text-secondary hover:text-text-primary'}`} onClick={() => setMode('manhwa')}>Manhwa</button>
           </div>
+          <div className="ml-2 flex items-center gap-2 text-xs">
+            <button onClick={() => setLeftCollapsed(v => !v)} className="rounded-md border border-border-default px-2 py-1 text-text-secondary hover:bg-bg-hover transition-micro">{leftCollapsed ? 'Show Left' : 'Hide Left'}</button>
+            <button onClick={() => setRightCollapsed(v => !v)} className="rounded-md border border-border-default px-2 py-1 text-text-secondary hover:bg-bg-hover transition-micro">{rightCollapsed ? 'Show Right' : 'Hide Right'}</button>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={toggleFs} className="rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro">{fs ? 'Exit Full' : 'Full-Screen'}</button>
@@ -625,28 +979,175 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
         </div>
       </div>
       <div className="grid grid-rows-[1fr_auto] h-[calc(100%-3rem)] min-h-0">
-        <div className="grid md:grid-cols-[260px_1fr_260px] h-full min-h-0">
+        <div
+          className={
+            `grid h-full min-h-0 ` +
+            (
+              leftCollapsed && rightCollapsed ? 'md:grid-cols-[1fr]' :
+              leftCollapsed && !rightCollapsed ? 'md:grid-cols-[1fr_260px]' :
+              !leftCollapsed && rightCollapsed ? 'md:grid-cols-[260px_1fr]' :
+              'md:grid-cols-[260px_1fr_260px]'
+            )
+          }
+        >
+          {!leftCollapsed && (
           <aside className="border-r border-border-default overflow-y-auto p-3 hidden md:block bg-bg-elevated">
             <div className="text-xs text-text-tertiary mb-2">Chapter List</div>
             <div className="flex flex-col gap-1">
               {chapters.map((c) => (
-                <button key={c.id} onClick={() => setActiveCh(c.id)} className={`text-left px-2 py-1 rounded transition-micro ${activeCh === c.id ? 'bg-bg-hover text-text-primary' : 'text-text-secondary hover:bg-bg-hover/50'}`}>{c.title}</button>
+                <button key={c.id} onClick={() => { setActiveCh(c.id); setTargetCh(c.id); }} className={`text-left px-2 py-1 rounded transition-micro ${activeCh === c.id ? 'bg-bg-hover text-text-primary' : 'text-text-secondary hover:bg-bg-hover/50'}`}>{c.title}</button>
               ))}
             </div>
           </aside>
+          )}
           <main className="overflow-hidden min-h-0">
             <div className="h-full">
-              <ReaderView projectId={projectId} mode={mode} />
+              <ReaderView
+                projectId={projectId}
+                mode={mode}
+                targetChapterId={targetCh}
+                onChapterInView={(id) => setActiveCh(id)}
+                targetPanelIndex={targetPanelIdx}
+                targetScrollPercent={targetScrollPct}
+                onProgress={(pct, meta) => {
+                  setProgress(Math.max(0, Math.min(100, pct || 0)));
+                  if (mode === 'manhwa') {
+                    setPanelIdx(meta?.index ?? 0);
+                    setPanelTotal(meta?.total ?? 0);
+                  } else {
+                    setChapterIdx(meta?.index ?? (activeCh ? chapters.findIndex(c => c.id === activeCh) : 0));
+                  }
+                }}
+              />
             </div>
           </main>
-          <aside className="border-l border-border-default overflow-y-auto p-3 hidden md:block bg-bg-elevated">
-            <div className="text-xs text-text-tertiary mb-2">Sidebar</div>
-            <div className="space-y-2 text-sm text-text-secondary">
-              <div>- TOC</div>
-              <div>- Notes</div>
-              <div>- Share</div>
+          {!rightCollapsed && (
+          <aside className="border-l border-border-default overflow-hidden hidden md:flex flex-col bg-bg-elevated">
+            <div className="flex-1 overflow-y-auto">
+              {editingBookmarkId ? (
+                <div className="p-4 space-y-3 border-b border-border-default">
+                  <h3 className="text-sm font-semibold text-text-primary">Edit Bookmark</h3>
+                  <input
+                    type="text"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    placeholder="Bookmark name"
+                    className="w-full px-2 py-1.5 text-xs bg-bg-primary border border-border-default rounded text-text-primary placeholder-text-tertiary focus:outline-none focus:border-accent"
+                  />
+                  <textarea
+                    value={editDescription}
+                    onChange={(e) => setEditDescription(e.target.value)}
+                    placeholder="Description (optional)"
+                    className="w-full px-2 py-1.5 text-xs bg-bg-primary border border-border-default rounded text-text-primary placeholder-text-tertiary focus:outline-none focus:border-accent resize-none h-20"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={async () => {
+                        setSavingBookmarkId(editingBookmarkId);
+                        try {
+                          const api = createApi(supabase);
+                          const result = await api.updateBookmark(projectId, editingBookmarkId, editName, editDescription);
+                          const updated = bookmarks.map((b) =>
+                            b.id === editingBookmarkId ? { ...b, name: editName, description: editDescription, ...result } : b
+                          );
+                          setBookmarks(updated);
+                          setEditingBookmarkId(null);
+                        } catch (e) {
+                          console.error('Update error:', e);
+                        } finally {
+                          setSavingBookmarkId(null);
+                        }
+                      }}
+                      disabled={savingBookmarkId === editingBookmarkId}
+                      className="flex-1 px-2 py-1 text-xs bg-accent text-white rounded hover:bg-accent/90 transition-micro disabled:opacity-70 flex items-center justify-center gap-1"
+                    >
+                      {savingBookmarkId === editingBookmarkId ? (
+                        <>
+                          <svg className="w-3 h-3 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="none" opacity="0.3" />
+                            <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                          </svg>
+                          Saving…
+                        </>
+                      ) : (
+                        'Save'
+                      )}
+                    </button>
+                    <button
+                      onClick={() => setEditingBookmarkId(null)}
+                      className="flex-1 px-2 py-1 text-xs bg-bg-hover text-text-secondary rounded hover:bg-border-default transition-micro"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-1 p-2">
+                  {bookmarks.length === 0 ? (
+                    <div className="text-xs text-text-tertiary p-3 text-center">No bookmarks yet</div>
+                  ) : (
+                    bookmarks.map((bm) => (
+                      <div key={bm.id} className="flex items-center gap-2 p-2 rounded hover:bg-bg-hover group transition-micro cursor-pointer" onClick={() => {
+                        // Update UI bar immediately
+                        setProgress(bm.progress);
+                        // Ask ReaderView to programmatically scroll to this percent
+                        setTargetScrollPct((prev) => (prev === bm.progress ? bm.progress + 0.0001 : bm.progress));
+                      }}>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-medium text-text-primary truncate">{bm.name}</div>
+                          <div className="text-xs text-text-tertiary">{bm.progress}% progress</div>
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingBookmarkId(bm.id);
+                            setEditName(bm.name);
+                            setEditDescription(bm.description || '');
+                          }}
+                          className="opacity-0 group-hover:opacity-100 p-1 text-text-secondary hover:text-accent transition-micro"
+                          title="Edit"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                        </button>
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            setDeletingBookmarkId(bm.id);
+                            try {
+                              const api = createApi(supabase);
+                              await api.deleteBookmark(projectId, bm.id);
+                              setBookmarks(bookmarks.filter((b) => b.id !== bm.id));
+                            } catch (e) {
+                              console.error('Delete error:', e);
+                            } finally {
+                              setDeletingBookmarkId(null);
+                            }
+                          }}
+                          disabled={deletingBookmarkId === bm.id}
+                          className="opacity-0 group-hover:opacity-100 p-1 text-text-secondary hover:text-red-500 transition-micro disabled:opacity-50"
+                          title="Delete"
+                        >
+                          {deletingBookmarkId === bm.id ? (
+                            <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="none" opacity="0.3" />
+                              <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                            </svg>
+                          ) : (
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          )}
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
           </aside>
+          )}
         </div>
         <div className="h-14 border-t border-border-default px-4 flex items-center gap-3 bg-bg-elevated">
           <div className="text-xs text-text-tertiary">Progress</div>
@@ -654,9 +1155,50 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
             <div className="h-full bg-accent transition-all duration-300" style={{ width: `${progress}%` }} />
           </div>
           <div className="text-xs text-text-secondary w-12 text-right">{progress}%</div>
-          <button className="rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro" disabled>Prev</button>
-          <button className="rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro" disabled>Next</button>
-          <button className="rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro" disabled>Bookmark</button>
+          <button
+            className="rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro disabled:opacity-50"
+            onClick={() => {
+              if (mode === 'manhwa') {
+                if (panelIdx > 0) setTargetPanelIdx(panelIdx - 1);
+              } else {
+                if (!activeCh) return;
+                const idx = chapters.findIndex(c => c.id === activeCh);
+                if (idx > 0) { const prevId = chapters[idx - 1].id; setTargetCh(prevId); setActiveCh(prevId); }
+              }
+            }}
+            disabled={mode === 'manhwa' ? panelIdx <= 0 : (chapters.length === 0 || chapters.findIndex(c => c.id === activeCh) <= 0)}
+          >Prev</button>
+          <button
+            className="rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro disabled:opacity-50"
+            onClick={() => {
+              if (mode === 'manhwa') {
+                if (panelIdx < Math.max(0, panelTotal - 1)) setTargetPanelIdx(panelIdx + 1);
+              } else {
+                if (!activeCh) return;
+                const idx = chapters.findIndex(c => c.id === activeCh);
+                if (idx >= 0 && idx < chapters.length - 1) { const nextId = chapters[idx + 1].id; setTargetCh(nextId); setActiveCh(nextId); }
+              }
+            }}
+            disabled={mode === 'manhwa' ? (panelTotal <= 0 || panelIdx >= panelTotal - 1) : (chapters.length === 0 || chapters.findIndex(c => c.id === activeCh) >= chapters.length - 1)}
+          >Next</button>
+          <button
+            className="rounded-md border border-accent bg-accent/20 px-3 py-1.5 text-xs text-accent hover:bg-accent/30 transition-micro disabled:opacity-50"
+            onClick={async () => {
+              setBookmarkLoading(true);
+              try {
+                const api = createApi(supabase);
+                const bm = await api.createBookmark(projectId, progress);
+                setBookmarks([bm, ...bookmarks]);
+              } catch (e) {
+                console.error('Bookmark error:', e);
+              } finally {
+                setBookmarkLoading(false);
+              }
+            }}
+            disabled={bookmarkLoading}
+          >
+            {bookmarkLoading ? 'Creating…' : '+ Bookmark'}
+          </button>
         </div>
       </div>
     </div>

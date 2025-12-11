@@ -224,6 +224,91 @@ export function createApi(supabase: SupabaseClient) {
         method: 'POST',
         body: JSON.stringify(body),
       }),
+
+    // User Stats
+    getUserStats: () =>
+      apiFetch<{
+        id: string;
+        userId: string;
+        level: number;
+        totalExp: number;
+        currentLevelExp: number;
+        nextLevelExp: number;
+        progressPercent: number;
+        chaptersCreated: number;
+        charactersCreated: number;
+        worldSettingsCreated: number;
+        projectsCreated: number;
+        totalWordsWritten: number;
+      }>(supabase, `/api/user/stats`),
+
+    awardExp: (body: { action: string; amount?: number }) =>
+      apiFetch<{
+        success: boolean;
+        expAwarded: number;
+        leveledUp: boolean;
+        newLevel: number;
+        totalExp: number;
+        currentLevelExp: number;
+        nextLevelExp: number;
+        progressPercent: number;
+      }>(supabase, `/api/user/stats/award`, { method: 'POST', body: JSON.stringify(body) }),
+
+    incrementStat: (body: { field: string; amount?: number }) =>
+      apiFetch<{ success: boolean; field: string; newValue: number }>(supabase, `/api/user/stats/increment`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+
+    syncUserStats: () =>
+      apiFetch<{
+        success: boolean;
+        message: string;
+        level: number;
+        totalExp: number;
+        currentLevelExp: number;
+        nextLevelExp: number;
+        progressPercent: number;
+        projectsCreated: number;
+        chaptersCreated: number;
+        charactersCreated: number;
+        worldSettingsCreated: number;
+        totalWordsWritten: number;
+      }>(supabase, `/api/user/stats/sync`, { method: 'POST' }),
+
+    // Export project - returns raw file content
+    exportProject: async (projectId: string, format: 'json' | 'markdown' | 'text' = 'json') => {
+      const token = (await supabase.auth.getSession()).data.session?.access_token;
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/project/${projectId}/export`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
+        body: JSON.stringify({ format }),
+      });
+      if (!response.ok) throw new Error(`Export failed: ${response.statusText}`);
+      return response.text(); // Return as text, not JSON
+    },
+
+    // Bookmarks
+    createBookmark: (projectId: string, progress: number, name?: string, description?: string) =>
+      apiFetch<any>(supabase, `/api/project/${projectId}/bookmarks`, {
+        method: 'POST',
+        body: JSON.stringify({ progress, name, description }),
+      }),
+
+    listBookmarks: (projectId: string) =>
+      apiFetch<any[]>(supabase, `/api/project/${projectId}/bookmarks`),
+
+    updateBookmark: (projectId: string, bookmarkId: string, name?: string, description?: string) =>
+      apiFetch<any>(supabase, `/api/project/${projectId}/bookmarks/${bookmarkId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name, description }),
+      }),
+
+    deleteBookmark: (projectId: string, bookmarkId: string) =>
+      apiFetch<void>(supabase, `/api/project/${projectId}/bookmarks/${bookmarkId}`, { method: 'DELETE' }),
   };
 }
 

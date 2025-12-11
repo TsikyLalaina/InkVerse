@@ -7,6 +7,7 @@ import { getSummary, saveChatMemory, retrieveRelevant, getLastAssistantDraft } f
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
 import { generateImage } from '../services/fal';
+import { awardExpForAction } from '../utils/expAwarder';
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY || '' });
 
@@ -1205,6 +1206,14 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
       }
 
       send({ type: 'done', messageId: assistantMsg.id });
+      
+      // Award EXP for chat interaction
+      try {
+        await awardExpForAction(user.id, 'CHAT_MESSAGE');
+      } catch (err) {
+        req.log.warn({ err }, 'Failed to award EXP for chat message');
+      }
+      
       reply.raw.end();
     } catch (err: any) {
       send({ type: 'error', message: err?.message || 'Unexpected error' });

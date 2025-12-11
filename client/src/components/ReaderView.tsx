@@ -20,9 +20,19 @@ export type ReaderMode = 'novel' | 'manhwa';
 export function ReaderView({
   projectId,
   mode,
+  targetChapterId,
+  onChapterInView,
+  targetPanelIndex,
+  targetScrollPercent,
+  onProgress,
 }: {
   projectId: string;
   mode: ReaderMode;
+  targetChapterId?: string | null;
+  onChapterInView?: (id: string) => void;
+  targetPanelIndex?: number | null;
+  targetScrollPercent?: number | null;
+  onProgress?: (percent: number, meta?: { index: number; total: number; id?: string }) => void;
 }) {
   const supabase = useSupabase();
   const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -104,6 +114,15 @@ export function ReaderView({
   const listRef = useRef<any>(null);
   const outerRef = useRef<HTMLDivElement | null>(null);
   const sizeMap = useRef<Record<number, number>>({});
+  const novelContainerRef = useRef<HTMLDivElement | null>(null);
+  const sectionRefs = useRef<Record<string, HTMLElement | null>>({});
+  const lastVisibleIdxRef = useRef(0);
+  const getScrollPct = useCallback((el: HTMLElement | null) => {
+    if (!el) return 0;
+    const max = Math.max(1, el.scrollHeight - el.clientHeight);
+    const pct = (el.scrollTop / max) * 100;
+    return Math.max(0, Math.min(100, pct));
+  }, []);
   const setSize = useCallback((index: number, size: number) => {
     if (sizeMap.current[index] !== size) {
       sizeMap.current[index] = size;
@@ -153,11 +172,18 @@ export function ReaderView({
 
   const onItemsRendered = useCallback((info: any) => {
     if (mode !== 'manhwa') return;
-    const { visibleStopIndex } = info || {};
+    const { visibleStartIndex, visibleStopIndex } = info || {};
     if (typeof visibleStopIndex === 'number' && itemCount && visibleStopIndex >= itemCount - 3) {
       void loadMore();
     }
-  }, [itemCount, loadMore, mode]);
+    if (typeof visibleStartIndex === 'number' && images.length > 0) {
+      const totalPanels = images.length;
+      const idx = Math.max(0, Math.min(visibleStartIndex, totalPanels - 1));
+      lastVisibleIdxRef.current = idx;
+      const pct = Math.round(((idx + 1) / Math.max(totalPanels, 1)) * 100);
+      onProgress?.(pct, { index: idx, total: totalPanels });
+    }
+  }, [images.length, itemCount, loadMore, mode, onProgress]);
 
   const itemKey = useCallback(
     (index: number) => (mode === 'novel' ? (chapters[index]?.id || `ch-${index}`) : (images[index] || `img-${index}`)),
@@ -177,6 +203,107 @@ export function ReaderView({
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  // Handle external navigation target (novel mode): ensure present then scroll into view
+  useEffect(() => {
+    if (mode !== 'novel') return;
+    if (!targetChapterId) return;
+    let cancelled = false;
+    (async () => {
+      const api = createApi(supabase);
+      // Ensure the chapter is loaded
+      let has = chapters.some((c) => c.id === targetChapterId);
+      let nextPage = page;
+      while (!has && (total === null || chapters.length < total)) {
+        try {
+          const { items } = await api.listChaptersPaginated(projectId, nextPage, 20);
+          if (cancelled) return;
+          if (!items || (items as any[]).length === 0) break;
+          setChapters((prev) => {
+            const appended = [...prev, ...(items as any)];
+            has = appended.some((c) => c.id === targetChapterId);
+            return appended;
+          });
+          nextPage += 1;
+          setPage(nextPage);
+        } catch {
+          break;
+        }
+        if (has) break;
+      }
+      // Defer scroll to allow refs to mount
+      requestAnimationFrame(() => {
+        if (cancelled) return;
+        const el = sectionRefs.current[targetChapterId!];
+        if (el) {
+          try { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch {}
+        }
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [mode, targetChapterId, chapters, page, projectId, supabase, total]);
+
+  // Handle external navigation target for manhwa (panel index)
+  useEffect(() => {
+    if (mode !== 'manhwa') return;
+    if (typeof targetPanelIndex !== 'number' || targetPanelIndex < 0) return;
+    try {
+      listRef.current?.scrollToItem?.(targetPanelIndex, 'start');
+    } catch {}
+  }, [mode, targetPanelIndex]);
+
+  // External scroll by percentage for novel mode
+  useEffect(() => {
+    if (mode !== 'novel') return;
+    if (typeof targetScrollPercent !== 'number') return;
+    if (!chapters.length) return;
+    const el = novelContainerRef.current;
+    if (!el) return;
+    const pct = Math.max(0, Math.min(100, targetScrollPercent));
+    // Ensure layout is ready before scrolling
+    requestAnimationFrame(() => {
+      const max = Math.max(1, el.scrollHeight - el.clientHeight);
+      const top = (pct / 100) * max;
+      try { (el as any).scrollTo({ top, behavior: 'smooth' }); } catch { el.scrollTop = top; }
+    });
+  }, [mode, targetScrollPercent, chapters.length]);
+
+  // External scroll by percentage for manhwa mode
+  useEffect(() => {
+    if (mode !== 'manhwa') return;
+    if (typeof targetScrollPercent !== 'number') return;
+    const pct = Math.max(0, Math.min(100, targetScrollPercent));
+    const totalPanels = images.length;
+    if (!totalPanels) return;
+    requestAnimationFrame(() => {
+      try {
+        const idx = Math.round((pct / 100) * Math.max(0, totalPanels - 1));
+        listRef.current?.scrollToItem?.(idx, 'start');
+      } catch {}
+      // Fallback: direct scroll on outerRef
+      const el = outerRef.current;
+      if (el) {
+        const max = Math.max(1, el.scrollHeight - el.clientHeight);
+        const top = (pct / 100) * max;
+        try { (el as any).scrollTo({ top, behavior: 'smooth' }); } catch { el.scrollTop = top; }
+      }
+    });
+  }, [mode, targetScrollPercent, images.length]);
+
+  // Initial progress callbacks when content loads
+  useEffect(() => {
+    if (mode === 'novel' && chapters.length) {
+      const firstId = chapters[0].id;
+      onChapterInView?.(firstId);
+      const tot = total ?? chapters.length;
+      const pct = Math.round(getScrollPct(novelContainerRef.current!));
+      onProgress?.(pct, { index: 0, total: tot, id: firstId });
+    } else if (mode === 'manhwa' && images.length) {
+      const pct = Math.round(getScrollPct(outerRef.current!));
+      onProgress?.(pct, { index: 0, total: images.length });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, chapterIdsSig, imageSig, total]);
+
   // Observe scroll container size changes (e.g., layout panels opening) and reset
   useEffect(() => {
     if (!outerRef.current || typeof ResizeObserver === 'undefined') return;
@@ -186,6 +313,23 @@ export function ReaderView({
     ro.observe(outerRef.current);
     return () => ro.disconnect();
   }, [outerRef]);
+
+  // Manhwa: report progress on scroll position precisely
+  useEffect(() => {
+    if (mode !== 'manhwa') return;
+    const el = outerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const pct = Math.round(getScrollPct(el));
+      onProgress?.(pct, { index: lastVisibleIdxRef.current, total: images.length });
+    };
+    el.addEventListener('scroll', onScroll, { passive: true } as any);
+    // emit once
+    onScroll();
+    return () => {
+      el.removeEventListener('scroll', onScroll as any);
+    };
+  }, [mode, getScrollPct, images.length, onProgress]);
 
   if (loading) return <div className="p-4 text-slate-400">Loading…</div>;
   if (error) return <div className="p-4 text-red-400">{error}</div>;
@@ -197,12 +341,40 @@ export function ReaderView({
       if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) {
         void loadMore();
       }
+      // determine active chapter in view
+      try {
+        const rectTop = (node: HTMLElement) => {
+          const r = node.getBoundingClientRect();
+          const root = el.getBoundingClientRect();
+          return r.top - root.top;
+        };
+        let bestId: string | null = null;
+        let bestTop = Number.POSITIVE_INFINITY;
+        for (const ch of chapters) {
+          const sec = sectionRefs.current[ch.id];
+          if (!sec) continue;
+          const top = rectTop(sec);
+          if (top >= -40 && top < bestTop) { bestTop = top; bestId = ch.id; }
+        }
+        if (!bestId && chapters.length) bestId = chapters[0].id;
+        if (bestId) {
+          onChapterInView?.(bestId);
+          const idx = chapters.findIndex((c) => c.id === bestId);
+          const tot = total ?? chapters.length;
+          const pct = Math.round(getScrollPct(el));
+          onProgress?.(pct, { index: Math.max(0, idx), total: Math.max(1, tot), id: bestId });
+        }
+      } catch {}
     };
     return (
-      <div className="w-full h-full overflow-y-auto" role="feed" onScroll={onScroll}>
+      <div ref={novelContainerRef} className="w-full h-full overflow-y-auto" role="feed" onScroll={onScroll}>
         <div className="mx-auto max-w-3xl flex flex-col gap-12 px-4 py-6">
           {chapters.map((ch) => (
-            <section key={ch.id} className="border-t border-cyan-500/30 pt-8">
+            <section
+              key={ch.id}
+              ref={(el) => { sectionRefs.current[ch.id] = el; }}
+              className="border-t border-cyan-500/30 pt-8"
+            >
               <h3 className="text-xl font-semibold mb-3">{ch.title}</h3>
               <p className="leading-relaxed text-gray-300 whitespace-pre-wrap">{ch.content}</p>
             </section>

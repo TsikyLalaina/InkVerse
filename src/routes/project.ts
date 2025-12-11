@@ -2,6 +2,8 @@ import type { FastifyPluginCallback } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../db/prisma';
 import { createClient } from '@supabase/supabase-js';
+import { awardExpForAction, countWords } from '../utils/expAwarder';
+import { exportProjectAsJson, exportProjectAsMarkdown, exportProjectAsText } from '../utils/projectExporter';
 const ChatTypeEnum = z.enum(['plot','character','world']);
 
 const sbUrl = process.env.SUPABASE_URL;
@@ -32,6 +34,7 @@ const settingsBody = z.object({
   title: z.string().min(1).optional(),
   description: z.string().optional(),
   coverImage: z.string().url().optional(),
+  cover_image: z.string().url().optional(),
   genre: z.string().optional(),
   coreConflict: z.string().optional(),
   settingsJson: z.any().optional(),
@@ -71,7 +74,7 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     const projects = await prisma.project.findMany({
       where: { userId: user.id },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, title: true, description: true, createdAt: true, mode: true },
+      select: { id: true, title: true, description: true, createdAt: true, mode: true, coverImage: true },
     });
     return reply.send(projects);
   });
@@ -161,6 +164,14 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
       select: { id: true, title: true, createdAt: true },
     });
 
+    // Award EXP for creating a chapter
+    try {
+      const wordCount = countWords(body.content ?? '');
+      await awardExpForAction(user.id, 'CREATE_CHAPTER', { wordCount });
+    } catch (err) {
+      req.log.warn({ err }, 'Failed to award EXP for chapter creation');
+    }
+
     return reply.code(201).send(chapter);
   });
 
@@ -191,6 +202,17 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     if (updated.count === 0) return reply.code(404).send({ error: 'Not found' });
 
     const ch = await prisma.chapter.findFirst({ where: { id: params.chapterId, projectId: project.id }, select: { id: true, title: true, content: true, panelScript: true } });
+    
+    // Award EXP for updating chapter content
+    try {
+      if (body.content) {
+        const wordCount = countWords(body.content);
+        await awardExpForAction(user.id, 'UPDATE_CHAPTER', { wordCount });
+      }
+    } catch (err) {
+      req.log.warn({ err }, 'Failed to award EXP for chapter update');
+    }
+    
     return reply.send(ch);
   });
 
@@ -259,6 +281,14 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
       select: { id: true, name: true, summary: true, traits: true, images: true, createdAt: true },
     } as any);
     try { (req as any).log?.info?.({ route: 'world.create', id: (created as any).id }, 'World CREATE done'); } catch {}
+    
+    // Award EXP for creating a world setting
+    try {
+      await awardExpForAction(user.id, 'CREATE_WORLD_SETTING');
+    } catch (err) {
+      req.log.warn({ err }, 'Failed to award EXP for world setting creation');
+    }
+    
     return reply.code(201).send(created);
   });
 
@@ -348,6 +378,13 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
       select: { id: true },
     });
 
+    // Award EXP for creating a project
+    try {
+      await awardExpForAction(user.id, 'CREATE_PROJECT');
+    } catch (err) {
+      req.log.warn({ err }, 'Failed to award EXP for project creation');
+    }
+
     return reply.code(201).send(project);
   });
 
@@ -364,6 +401,7 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
           id: true,
           title: true,
           description: true,
+          coverImage: true,
           // @ts-ignore optional columns depending on schema
           mode: true as any,
           // @ts-ignore
@@ -386,6 +424,7 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
           id: true,
           title: true,
           description: true,
+          coverImage: true,
           // @ts-ignore optional columns depending on schema
           mode: true as any,
           // @ts-ignore
@@ -458,6 +497,7 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     if (body.title !== undefined) data.title = body.title;
     if (body.description !== undefined) data.description = body.description;
     if (body.coverImage !== undefined) data.coverImage = body.coverImage;
+    if ((body as any).cover_image !== undefined) data.coverImage = (body as any).cover_image;
     if (body.genre !== undefined) data.genre = body.genre;
     if (body.coreConflict !== undefined) data.coreConflict = body.coreConflict;
     if (body.settingsJson !== undefined) {
@@ -638,6 +678,14 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     }
     const result = { ...created, images: Array.isArray(body.images) ? body.images : (created.imageUrl ? [created.imageUrl] : []) };
     try { (req as any).log?.info?.({ route: 'characters.create', id: (result as any).id }, 'Characters CREATE done'); } catch {}
+    
+    // Award EXP for creating a character
+    try {
+      await awardExpForAction(user.id, 'CREATE_CHARACTER');
+    } catch (err) {
+      req.log.warn({ err }, 'Failed to award EXP for character creation');
+    }
+    
     return reply.code(201).send(result);
   });
 
@@ -709,6 +757,155 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true } });
     if (!project) return reply.code(404).send({ error: 'Not found' });
     const del = await (prisma as any).character.deleteMany({ where: { id: params.charId, projectId: project.id } });
+    if (!del.count) return reply.code(404).send({ error: 'Not found' });
+    return reply.code(204).send();
+  });
+
+  // --- Export endpoints ---
+  app.post('/project/:id/export', async (req, reply) => {
+    const params = uuidParam.parse(req.params);
+    const user = (req as any).user;
+    if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
+
+    const body = z.object({ format: z.enum(['json', 'markdown', 'text']).default('json') }).parse(req.body);
+
+    try {
+      const project = await prisma.project.findFirst({
+        where: { id: params.id, userId: user.id },
+        select: { id: true, title: true },
+      });
+      if (!project) return reply.code(404).send({ error: 'Not found' });
+
+      let content: string;
+      let contentType: string;
+      let filename: string;
+
+      switch (body.format) {
+        case 'markdown':
+          content = await exportProjectAsMarkdown(params.id, user.id);
+          contentType = 'text/markdown';
+          filename = `${project.title}.md`;
+          break;
+        case 'text':
+          content = await exportProjectAsText(params.id, user.id);
+          contentType = 'text/plain';
+          filename = `${project.title}.txt`;
+          break;
+        case 'json':
+        default:
+          const jsonData = await exportProjectAsJson(params.id, user.id);
+          content = JSON.stringify(jsonData, null, 2);
+          contentType = 'application/json';
+          filename = `${project.title}.json`;
+          break;
+      }
+
+      // Award EXP for exporting
+      try {
+        await awardExpForAction(user.id, 'EXPORT_PROJECT');
+      } catch (err) {
+        req.log.warn({ err }, 'Failed to award EXP for project export');
+      }
+
+      // Set response headers for download
+      reply.header('Content-Type', contentType);
+      reply.header('Content-Disposition', `attachment; filename="${filename}"`);
+      return reply.send(content);
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: 'Failed to export project' });
+    }
+  });
+
+  // --- Bookmarks ---
+  app.post('/project/:id/bookmarks', async (req, reply) => {
+    const params = uuidParam.parse(req.params);
+    const user = (req as any).user;
+    if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
+
+    const body = z.object({
+      progress: z.number().int().min(0).max(100),
+      name: z.string().optional(),
+      description: z.string().optional(),
+    }).parse(req.body);
+
+    const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true } });
+    if (!project) return reply.code(404).send({ error: 'Not found' });
+
+    // Get count of existing bookmarks to generate default name
+    const count = await (prisma as any).bookmark.count({ where: { projectId: project.id } } as any);
+    const defaultName = body.name || `Bookmark ${count + 1}`;
+
+    const bookmark = await (prisma as any).bookmark.create({
+      data: {
+        projectId: project.id,
+        name: defaultName,
+        description: body.description || null,
+        progress: body.progress,
+      },
+      select: { id: true, name: true, description: true, progress: true, updatedAt: true },
+    } as any);
+    return reply.code(201).send(bookmark);
+  });
+
+  app.get('/project/:id/bookmarks', async (req, reply) => {
+    const params = uuidParam.parse(req.params);
+    const user = (req as any).user;
+    if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
+
+    const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true } });
+    if (!project) return reply.code(404).send({ error: 'Not found' });
+
+    const bookmarks = await (prisma as any).bookmark.findMany({
+      where: { projectId: project.id },
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true, name: true, description: true, progress: true, updatedAt: true },
+    } as any);
+    return reply.send(bookmarks);
+  });
+
+  app.patch('/project/:id/bookmarks/:bookmarkId', async (req, reply) => {
+    const params = z.object({ id: z.string().uuid(), bookmarkId: z.string().uuid() }).parse(req.params);
+    const user = (req as any).user;
+    if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
+
+    const body = z.object({
+      name: z.string().optional(),
+      description: z.string().optional(),
+    }).parse(req.body);
+
+    const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true } });
+    if (!project) return reply.code(404).send({ error: 'Not found' });
+
+    const updated = await (prisma as any).bookmark.updateMany({
+      where: { id: params.bookmarkId, projectId: project.id },
+      data: {
+        ...(body.name && { name: body.name }),
+        ...(body.description !== undefined && { description: body.description }),
+        updatedAt: new Date(),
+      },
+    } as any);
+
+    if (!updated.count) return reply.code(404).send({ error: 'Not found' });
+
+    const result = await (prisma as any).bookmark.findFirst({
+      where: { id: params.bookmarkId },
+      select: { id: true, name: true, description: true, progress: true, updatedAt: true },
+    } as any);
+    return reply.send(result);
+  });
+
+  app.delete('/project/:id/bookmarks/:bookmarkId', async (req, reply) => {
+    const params = z.object({ id: z.string().uuid(), bookmarkId: z.string().uuid() }).parse(req.params);
+    const user = (req as any).user;
+    if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
+
+    const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true } });
+    if (!project) return reply.code(404).send({ error: 'Not found' });
+
+    const del = await (prisma as any).bookmark.deleteMany({
+      where: { id: params.bookmarkId, projectId: project.id },
+    } as any);
     if (!del.count) return reply.code(404).send({ error: 'Not found' });
     return reply.code(204).send();
   });

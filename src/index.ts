@@ -7,6 +7,7 @@ import auth from './middleware/auth';
 import projectRoutes from './routes/project';
 import chatRoutes from './routes/chat';
 import generateRoutes, { webhookPlugin as falWebhook } from './routes/generate';
+import userRoutes from './routes/user';
 
 dotenv.config();
 
@@ -30,6 +31,7 @@ app.register(async (instance) => {
   instance.register(projectRoutes);
   instance.register(chatRoutes);
   instance.register(generateRoutes);
+  instance.register(userRoutes);
 }, { prefix: '/api' });
 
 app

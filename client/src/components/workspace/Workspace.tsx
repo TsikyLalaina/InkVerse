@@ -47,8 +47,12 @@ export function Workspace({ projectId }: { projectId: string }) {
   // Removed worldName field from Project
   const [projCoreConflict, setProjCoreConflict] = useState<string>("");
   const [projSettingsJson, setProjSettingsJson] = useState<string>("");
+  const [projCoverImage, setProjCoverImage] = useState<string>("");
+  const [uploadingCover, setUploadingCover] = useState(false);
+  const [uploadStatusCover, setUploadStatusCover] = useState<'idle'|'uploading'|'uploaded'|'error'>('idle');
   const [toastMsg, setToastMsg] = useState<string>("");
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const coverDropRef = useRef<HTMLDivElement | null>(null);
 
   const SETTINGS_TAB_ID = '__settings__';
   const CHARACTERS_TAB_ID = '__characters__';
@@ -258,6 +262,8 @@ export function Workspace({ projectId }: { projectId: string }) {
           if (p?.settingsJson !== undefined) {
             setProjSettingsJson(typeof p.settingsJson === 'string' ? p.settingsJson : JSON.stringify(p.settingsJson));
           }
+          if (typeof p?.coverImage === 'string') setProjCoverImage(p.coverImage);
+          else if (typeof (p as any)?.cover_image === 'string') setProjCoverImage((p as any).cover_image);
         } catch {}
       } catch {}
     })();
@@ -272,6 +278,48 @@ export function Workspace({ projectId }: { projectId: string }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, projectTitle, projectDescription]);
+
+  // Upload cover image handler
+  const onUploadCoverImage = useCallback(async (files: File[]) => {
+    if (!files || files.length === 0) return;
+    setUploadingCover(true);
+    setUploadStatusCover('uploading');
+    try {
+      const bucket = process.env.NEXT_PUBLIC_SUPABASE_COVER_BUCKET
+        || process.env.NEXT_PUBLIC_SUPABASE_IMAGE_BUCKET
+        || process.env.NEXT_PUBLIC_SUPABASE_BUCKET
+        || "projectcoverimage";
+      const file = files[0]; // Only use first file for cover
+      const ext = file.name.split('.').pop() || 'jpg';
+      const path = `${projectId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      try { console.debug('Supabase cover upload start', { bucket, path, file: { name: file.name, type: file.type, size: file.size } }); } catch {}
+      const { error: upErr } = await supabase.storage.from(bucket).upload(path, file, { upsert: true, contentType: file.type });
+      if (upErr) throw upErr;
+      const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+      const url = data.publicUrl;
+      setProjCoverImage(url);
+      try { console.debug('Supabase cover upload done', { url }); } catch {}
+      
+      // Persist to database
+      try {
+        await api.updateProjectSettings(projectId, { coverImage: url });
+        try { console.debug('Cover image persisted', { projectId }); } catch {}
+      } catch (e: any) {
+        console.error('Failed to persist cover image:', e);
+        setToastMsg('Image uploaded but failed to save');
+      }
+      
+      setToastMsg('Cover image uploaded');
+      setUploadStatusCover('uploaded');
+      setTimeout(() => { try { setUploadStatusCover('idle'); } catch {} }, 2000);
+    } catch (e: any) {
+      console.error('Cover upload failed:', e);
+      setToastMsg(e?.message || 'Upload failed');
+      setUploadStatusCover('error');
+    } finally {
+      setUploadingCover(false);
+    }
+  }, [projectId, supabase, api]);
 
   // Load chats (hydrate from cache first, then revalidate)
   useEffect(() => {
@@ -624,6 +672,27 @@ export function Workspace({ projectId }: { projectId: string }) {
               </div>
               <div className="min-h-0 overflow-y-auto px-6 py-6">
                 <div className="grid gap-4 max-w-2xl">
+                  <div ref={coverDropRef} className="flex flex-col items-start mb-2 p-4 rounded-xl border border-border-default bg-bg-primary w-full">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="text-xs text-text-tertiary uppercase tracking-wide">Cover Image</span>
+                      <label className="px-3 py-2 rounded-md border border-border-default bg-bg-elevated text-text-secondary hover:text-text-primary inline-flex items-center gap-2 cursor-pointer">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                        Upload Image
+                        <input type="file" accept="image/*" className="hidden" onChange={(e) => { const files = Array.from(e.target.files || []); if (files.length) { (async () => { await onUploadCoverImage(files as File[]); })(); } }} />
+                      </label>
+                      {uploadingCover && <div className="text-xs text-text-tertiary inline-flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin" /> Uploading…</div>}
+                      {uploadStatusCover === 'uploaded' && !uploadingCover && <div className="text-xs text-green-400">Uploaded</div>}
+                      {uploadStatusCover === 'error' && !uploadingCover && <div className="text-xs text-red-400">Upload failed</div>}
+                    </div>
+                    {projCoverImage && (
+                      <div className="relative border border-border-default rounded-md overflow-hidden bg-bg-primary w-full max-w-xs h-40">
+                        <img src={projCoverImage} alt="cover" className="w-full h-full object-cover" />
+                      </div>
+                    )}
+                    {!projCoverImage && (
+                      <div className="text-xs text-text-tertiary">No cover image yet. Upload or drop here.</div>
+                    )}
+                  </div>
                   <label className="grid gap-2 text-sm">
                     <span className="text-xs text-text-tertiary uppercase tracking-wide">Title</span>
                     <input
