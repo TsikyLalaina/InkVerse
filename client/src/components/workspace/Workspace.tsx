@@ -43,7 +43,7 @@ export function Workspace({ projectId }: { projectId: string }) {
   const [renameError, setRenameError] = useState<string | null>(null);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [projMode, setProjMode] = useState<'novel' | 'manhwa' | ''>('');
-  const [projGenre, setProjGenre] = useState<string>("");
+  const [projGenres, setProjGenres] = useState<string[]>([]);
   // Removed worldName field from Project
   const [projCoreConflict, setProjCoreConflict] = useState<string>("");
   const [projSettingsJson, setProjSettingsJson] = useState<string>("");
@@ -172,7 +172,7 @@ export function Workspace({ projectId }: { projectId: string }) {
       if (changes.title !== undefined) setProjectTitle(changes.title || '');
       if (changes.description !== undefined) setProjectDescription(changes.description || '');
       if (changes.mode) setProjMode(changes.mode);
-      if (changes.genre !== undefined) setProjGenre(changes.genre || '');
+      if (Array.isArray(changes.genres)) setProjGenres(changes.genres);
       if (changes.coreConflict !== undefined) setProjCoreConflict(changes.coreConflict || '');
       if (changes.settingsJson !== undefined) {
         try { setProjSettingsJson(typeof changes.settingsJson === 'string' ? changes.settingsJson : JSON.stringify(changes.settingsJson)); } catch { setProjSettingsJson(''); }
@@ -257,7 +257,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         setProjectDescription(p?.description || "");
         try {
           if (p?.mode && (p.mode === 'novel' || p.mode === 'manhwa')) setProjMode(p.mode);
-          if (typeof p?.genre === 'string') setProjGenre(p.genre);
+          if (Array.isArray(p?.genres)) setProjGenres(p.genres);
           if (typeof p?.coreConflict === 'string') setProjCoreConflict(p.coreConflict);
           if (p?.settingsJson !== undefined) {
             setProjSettingsJson(typeof p.settingsJson === 'string' ? p.settingsJson : JSON.stringify(p.settingsJson));
@@ -723,10 +723,11 @@ export function Workspace({ projectId }: { projectId: string }) {
                     </select>
                   </label>
                   <label className="grid gap-2 text-sm">
-                    <span className="text-xs text-text-tertiary uppercase tracking-wide">Genre</span>
+                    <span className="text-xs text-text-tertiary uppercase tracking-wide">Genres (comma-separated)</span>
                     <input
-                      value={projGenre}
-                      onChange={(e) => setProjGenre(e.target.value)}
+                      value={projGenres.join(', ')}
+                      onChange={(e) => setProjGenres(e.target.value.split(',').map(g => g.trim()).filter(g => g))}
+                      placeholder="e.g., Fantasy, Adventure"
                       className="w-full bg-bg-primary border border-border-default rounded-md px-4 py-2.5 text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent transition-colors duration-150"
                     />
                   </label>
@@ -770,7 +771,7 @@ export function Workspace({ projectId }: { projectId: string }) {
                       }
                       const changes: any = {};
                       if (projMode) changes.mode = projMode;
-                      if (projGenre) changes.genre = projGenre;
+                      if (projGenres.length > 0) changes.genres = projGenres;
                       if (projCoreConflict) changes.coreConflict = projCoreConflict;
                       if (projSettingsJson) {
                         try { changes.settingsJson = JSON.parse(projSettingsJson); } catch { changes.settingsJson = projSettingsJson; }

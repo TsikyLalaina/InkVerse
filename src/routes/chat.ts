@@ -458,7 +458,7 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
           'Do not ask the user for JSON. Do not invent entities; omit unknowns.',
           'Global JSON rules: All arrays MUST be arrays of strings; never arrays of objects. If you would produce an array of objects (e.g., name + description), use an object map of name -> string instead.',
           'Schema (flexible):',
-          '- Top-level keys (optional): "title", "description", "coverImage", "mode", "genre", "coreConflict", "settingsJson".',
+          '- Top-level keys (optional): "title", "description", "coverImage", "mode", "genres", "coreConflict", "settingsJson".',
           '- Put ALL other information under "settingsJson" using nested objects and arrays of strings only.',
           '- Plot-only scope: settingsJson MUST contain only plot-related structure such as: "plot", "beats", "acts", "actStructure", "outline", "themes", "tone", "logline", "summary", "notes", "arcs", "conflicts", "pace", "style", "setting", "characterDevelopment".',
           '- Allowed shapes for these keys: tone/themes/style/pace as array of short strings; plot as array of short strings or nested objects where any arrays are arrays of strings only; conflicts as object { internal, external, interpersonal } strings; setting as short descriptive string(s), not lists of world entities; characterDevelopment as short descriptive string.',
@@ -499,7 +499,7 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
         const rolling = await getSummary(params.chatId).catch(() => '') as string | '';
 
         // Retrieve relevant past snippets (keywords for settings)
-        const rel = await retrieveRelevant(params.chatId, 'settings world coreConflict genre title characters plot themes magicSystem technology rules city region', 8);
+        const rel = await retrieveRelevant(params.chatId, 'settings world coreConflict genres title characters plot themes magicSystem technology rules city region', 8);
         const relevantSnippets = (rel || []).map(r => `${r.role}: ${(r.content || '').slice(0, 400)}`).join('\n');
 
         const makeDraftUser = (variantNote: string) => [
@@ -513,7 +513,7 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
 
         const normalize = (proposed: any) => {
           const changes: any = {};
-          if (typeof proposed?.genre === 'string') changes.genre = proposed.genre;
+          if (Array.isArray(proposed?.genres)) changes.genres = proposed.genres;
           // worldName removed from Project; ignore any proposed world name at project level
           if (typeof proposed?.coreConflict === 'string') changes.coreConflict = proposed.coreConflict;
           if (typeof proposed?.title === 'string') changes.title = proposed.title;
@@ -522,7 +522,7 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
           if (typeof proposed?.mode === 'string' && ['novel','manhwa'].includes(proposed.mode)) changes.mode = proposed.mode;
           if (proposed?.settingsJson && typeof proposed.settingsJson === 'object') changes.settingsJson = proposed.settingsJson;
           if (!changes.settingsJson && proposed?.settings && typeof proposed.settings === 'object') changes.settingsJson = proposed.settings;
-          const reserved = new Set(['genre','worldName','world','coreConflict','title','description','coverImage','settingsJson','settings','mode']);
+          const reserved = new Set(['genres','worldName','world','coreConflict','title','description','coverImage','settingsJson','settings','mode']);
           for (const k of Object.keys(proposed || {})) {
             if (!reserved.has(k)) {
               (changes.settingsJson ||= {});
@@ -664,9 +664,9 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
             if (m) changes.coreConflict = `${m[1].trim()} vs. ${m[2].trim()}${m[3] ? m[3].trim() : ''}`.trim();
           }
 
-          // Genre
+          // Genres
           const genre1 = grabLine('Genre');
-          if (genre1) changes.genre = genre1;
+          if (genre1) changes.genres = [genre1];
 
           // Main Character block
           const mcName = grab(/\bName\s*[:\-]\s*([^\n\r*]+)/i);
@@ -693,7 +693,7 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
           'You are an intent classifier for InkVerse chat. Return ONLY strict JSON.',
           'Schema: { "action": "set_settings|create_chapter|convert_to_manhwa|update_chapter|generate_character_image|none", "args": object|null, "confidence": number }',
           'Rules:',
-          '- set_settings when user wants to update settings (e.g., genre, coreConflict, settingsJson). Treat synonyms like "save", "apply", "commit", or "update" (even without explicit field names) as set_settings if recent assistant output proposed settings.',
+          '- set_settings when user wants to update settings (e.g., genres, coreConflict, settingsJson). Treat synonyms like "save", "apply", "commit", or "update" (even without explicit field names) as set_settings if recent assistant output proposed settings.',
           '- create_chapter when user asks to write/draft/create a chapter.',
           '- update_chapter when user asks to rewrite/revise/edit an existing chapter. args can include { chapter_number?: number, title?: string }',
           '- convert_to_manhwa when user asks to convert text into panel script or generate panels.',

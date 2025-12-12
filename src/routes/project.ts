@@ -35,7 +35,7 @@ const settingsBody = z.object({
   description: z.string().optional(),
   coverImage: z.string().url().optional(),
   cover_image: z.string().url().optional(),
-  genre: z.string().optional(),
+  genres: z.array(z.string()).optional(),
   coreConflict: z.string().optional(),
   settingsJson: z.any().optional(),
   mode: ModeEnum.optional(),
@@ -71,11 +71,11 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     const user = (req as any).user;
     if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
 
-    const projects = await prisma.project.findMany({
+    const projects = await (prisma as any).project.findMany({
       where: { userId: user.id },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, title: true, description: true, createdAt: true, mode: true, coverImage: true },
-    });
+      select: { id: true, title: true, description: true, createdAt: true, mode: true, coverImage: true, genres: true, visibility: true, publicSlug: true },
+    } as any);
     return reply.send(projects);
   });
 
@@ -405,7 +405,7 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
           // @ts-ignore optional columns depending on schema
           mode: true as any,
           // @ts-ignore
-          genre: true as any,
+          genres: true as any,
           // @ts-ignore
           coreConflict: true as any,
           // @ts-ignore
@@ -428,7 +428,7 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
           // @ts-ignore optional columns depending on schema
           mode: true as any,
           // @ts-ignore
-          genre: true as any,
+          genres: true as any,
           // @ts-ignore
           coreConflict: true as any,
           // @ts-ignore
@@ -498,7 +498,7 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     if (body.description !== undefined) data.description = body.description;
     if (body.coverImage !== undefined) data.coverImage = body.coverImage;
     if ((body as any).cover_image !== undefined) data.coverImage = (body as any).cover_image;
-    if (body.genre !== undefined) data.genre = body.genre;
+    if (body.genres !== undefined) data.genres = body.genres;
     if (body.coreConflict !== undefined) data.coreConflict = body.coreConflict;
     if (body.settingsJson !== undefined) {
       const isObj = (v: any) => v && typeof v === 'object' && !Array.isArray(v);
@@ -527,7 +527,7 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
         // @ts-ignore
         mode: true as any,
         // @ts-ignore
-        genre: true as any,
+        genres: true as any,
         // @ts-ignore
         coreConflict: true as any,
         // @ts-ignore
@@ -555,19 +555,24 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
   app.get('/project/:id/chapters', async (req, reply) => {
     const params = uuidParam.parse(req.params);
     const user = (req as any).user;
-    if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
 
     const qp = z.object({
       page: z.coerce.number().int().min(0).default(0),
       limit: z.coerce.number().int().min(1).max(100).default(20),
     }).parse((req as any).query || {});
 
-    const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true } });
-    if (!project) return reply.code(404).send({ error: 'Not found' });
+    // Owner access if authenticated
+    let accessProject = await prisma.project.findFirst({ where: { id: params.id, userId: user?.id || '' }, select: { id: true } });
+    // Public access if not owner
+    if (!accessProject) {
+      const pub = await prisma.project.findFirst({ where: { id: params.id, visibility: 'public' as any }, select: { id: true } } as any);
+      if (!pub) return reply.code(404).send({ error: 'Not found' });
+      accessProject = pub as any;
+    }
 
-    const total = await prisma.chapter.count({ where: { projectId: project.id } });
+    const total = await prisma.chapter.count({ where: { projectId: (accessProject as any).id, ...(user?.id ? {} : { isCanon: true as any }) } });
     const items = await prisma.chapter.findMany({
-      where: { projectId: project.id },
+      where: { projectId: (accessProject as any).id, ...(user?.id ? {} : { isCanon: true as any }) },
       orderBy: { createdAt: 'asc' },
       skip: qp.page * qp.limit,
       take: qp.limit,
@@ -908,6 +913,176 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     } as any);
     if (!del.count) return reply.code(404).send({ error: 'Not found' });
     return reply.code(204).send();
+  });
+
+  // --- Sharing helpers and endpoints ---
+  function slugifyTitle(title: string) {
+    const base = (title || 'story')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60);
+    return base || 'story';
+  }
+
+  // Publish project (public)
+  app.post('/project/:id/share/publish', async (req, reply) => {
+    const params = uuidParam.parse(req.params);
+    const user = (req as any).user;
+    if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
+    const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id } });
+    if (!project) return reply.code(404).send({ error: 'Not found' });
+
+    let slug = (project as any).publicSlug as string | null;
+    if (!slug) {
+      const base = slugifyTitle((project as any).title || 'story');
+      const suffix = (project as any).id?.toString().slice(0, 8) || Math.random().toString(36).slice(2, 10);
+      slug = `${base}-${suffix}`;
+      let tries = 0;
+      while (tries < 3) {
+        const exists = await (prisma as any).project.findFirst({ where: { publicSlug: slug }, select: { id: true } } as any);
+        if (!exists) break;
+        slug = `${base}-${suffix}-${Math.random().toString(36).slice(2, 6)}`;
+        tries++;
+      }
+    }
+
+    const updated = await (prisma as any).project.update({
+      where: { id: params.id },
+      data: { visibility: 'public', publicSlug: slug, publishedAt: new Date() },
+      select: { id: true, visibility: true, publicSlug: true, publishedAt: true },
+    } as any);
+    return reply.send(updated);
+  });
+
+  // Unpublish (back to private)
+  app.post('/project/:id/share/unpublish', async (req, reply) => {
+    const params = uuidParam.parse(req.params);
+    const user = (req as any).user;
+    if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
+    const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id } });
+    if (!project) return reply.code(404).send({ error: 'Not found' });
+    const updated = await (prisma as any).project.update({
+      where: { id: params.id },
+      data: { visibility: 'private', publishedAt: null },
+      select: { id: true, visibility: true, publicSlug: true, publishedAt: true },
+    } as any);
+    return reply.send(updated);
+  });
+
+  // Create unlisted token
+  app.post('/project/:id/share/unlisted', async (req, reply) => {
+    const params = uuidParam.parse(req.params);
+    const user = (req as any).user;
+    if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
+    const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id } });
+    if (!project) return reply.code(404).send({ error: 'Not found' });
+    const token = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    const created = await (prisma as any).projectShareToken.create({
+      data: { projectId: params.id, token },
+      select: { id: true, token: true, createdAt: true },
+    } as any);
+    try { await (prisma as any).project.update({ where: { id: params.id }, data: { visibility: 'unlisted' } } as any); } catch {}
+    return reply.code(201).send(created);
+  });
+
+  // Revoke unlisted token
+  app.delete('/project/:id/share/unlisted/:token', async (req, reply) => {
+    const params = z.object({ id: z.string().uuid(), token: z.string() }).parse(req.params as any);
+    const user = (req as any).user;
+    if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
+    const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true } });
+    if (!project) return reply.code(404).send({ error: 'Not found' });
+    const updated = await (prisma as any).projectShareToken.updateMany({
+      where: { projectId: params.id, token: (req as any).params.token, revokedAt: null },
+      data: { revokedAt: new Date() },
+    } as any);
+    if (!updated.count) return reply.code(404).send({ error: 'Not found' });
+    return reply.code(204).send();
+  });
+
+  // Public read: by slug
+  app.get('/public/project/:slug', async (req, reply) => {
+    const { slug } = z.object({ slug: z.string().min(1) }).parse(req.params as any);
+    const project = await (prisma as any).project.findFirst({
+      where: { publicSlug: slug, visibility: 'public' },
+      select: { id: true, title: true, description: true, coverImage: true, mode: true, genres: true, createdAt: true },
+    } as any);
+    if (!project) return reply.code(404).send({ error: 'Not found' });
+    return reply.send(project);
+  });
+
+  app.get('/public/project/:slug/chapters', async (req, reply) => {
+    const { slug } = z.object({ slug: z.string().min(1) }).parse(req.params as any);
+    const qp = z.object({ page: z.coerce.number().int().min(0).default(0), limit: z.coerce.number().int().min(1).max(100).default(20) }).parse((req as any).query || {});
+    const project = await (prisma as any).project.findFirst({ where: { publicSlug: slug, visibility: 'public' }, select: { id: true } } as any);
+    if (!project) return reply.code(404).send({ error: 'Not found' });
+    const total = await prisma.chapter.count({ where: { projectId: project.id, isCanon: true as any } });
+    const items = await prisma.chapter.findMany({
+      where: { projectId: project.id, isCanon: true as any },
+      orderBy: { createdAt: 'asc' },
+      skip: qp.page * qp.limit,
+      take: qp.limit,
+      select: { id: true, title: true, content: true, panelScript: true, createdAt: true },
+    });
+    return reply.send({ items, total });
+  });
+
+  // Public: list public projects
+  app.get('/public/projects', async (req, reply) => {
+    const qp = z.object({
+      page: z.coerce.number().int().min(0).default(0),
+      limit: z.coerce.number().int().min(1).max(100).default(30),
+      q: z.string().optional(),
+    }).parse((req as any).query || {});
+    const where: any = { visibility: 'public' };
+    const q = (qp.q || '').trim();
+    if (q) {
+      where.OR = [
+        { title: { contains: q, mode: 'insensitive' } },
+        { description: { contains: q, mode: 'insensitive' } },
+      ];
+    }
+    const total = await prisma.project.count({ where } as any);
+    const items = await (prisma as any).project.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: qp.page * qp.limit,
+      take: qp.limit,
+      select: { id: true, title: true, description: true, coverImage: true, mode: true, genres: true, createdAt: true, publicSlug: true },
+    } as any);
+    const counts = await Promise.all(items.map((it: any) => prisma.chapter.count({ where: { projectId: it.id, isCanon: true as any } })));
+    const enriched = items.map((it: any, idx: number) => ({ ...it, chapterCount: counts[idx] || 0 }));
+    return reply.send({ items: enriched, total });
+  });
+
+  // Public read: by unlisted token
+  app.get('/public/u/:token', async (req, reply) => {
+    const { token } = z.object({ token: z.string().min(1) }).parse(req.params as any);
+    const row = await (prisma as any).projectShareToken.findFirst({ where: { token, revokedAt: null }, select: { projectId: true } } as any);
+    if (!row) return reply.code(404).send({ error: 'Not found' });
+    const project = await prisma.project.findFirst({
+      where: { id: (row as any).projectId },
+      select: { id: true, title: true, description: true, coverImage: true, mode: true as any, genres: true as any, createdAt: true },
+    } as any);
+    if (!project) return reply.code(404).send({ error: 'Not found' });
+    return reply.send(project);
+  });
+
+  app.get('/public/u/:token/chapters', async (req, reply) => {
+    const { token } = z.object({ token: z.string().min(1) }).parse(req.params as any);
+    const qp = z.object({ page: z.coerce.number().int().min(0).default(0), limit: z.coerce.number().int().min(1).max(100).default(20) }).parse((req as any).query || {});
+    const row = await (prisma as any).projectShareToken.findFirst({ where: { token, revokedAt: null }, select: { projectId: true } } as any);
+    if (!row) return reply.code(404).send({ error: 'Not found' });
+    const total = await prisma.chapter.count({ where: { projectId: (row as any).projectId, isCanon: true as any } });
+    const items = await prisma.chapter.findMany({
+      where: { projectId: (row as any).projectId, isCanon: true as any },
+      orderBy: { createdAt: 'asc' },
+      skip: qp.page * qp.limit,
+      take: qp.limit,
+      select: { id: true, title: true, content: true, panelScript: true, createdAt: true },
+    });
+    return reply.send({ items, total });
   });
 
   done();

@@ -43,7 +43,9 @@ export function buildSettingsBlock(args: Awaited<ReturnType<typeof loadProjectSe
   const lines: string[] = [];
   if (!project) return '';
   if (project.title) lines.push(`Project: ${project.title}`);
-  if (project.genre) lines.push(`Genre: ${project.genre}`);
+  if (project.genres && Array.isArray(project.genres) && project.genres.length > 0) {
+    lines.push(`Genres: ${(project.genres as string[]).join(', ')}`);
+  }
   if (project.coreConflict) lines.push(`Core conflict: ${project.coreConflict}`);
   // Do not print arbitrary settings JSON; keep focus on plot-only guidance
   if (characters?.length) {

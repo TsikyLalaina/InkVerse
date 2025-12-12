@@ -16,6 +16,9 @@ type ProjectItem = {
   createdAt: string;
   mode?: "novel" | "manhwa" | "convert";
   coverImage?: string | null;
+  genres?: string[] | null;
+  visibility?: 'private' | 'public' | 'unlisted';
+  publicSlug?: string | null;
 };
 
 type Mode = "CREATE" | "READER";
@@ -38,6 +41,7 @@ export default function DashboardPage() {
   const [readerModeFilter, setReaderModeFilter] = useState<'all' | 'novel' | 'manhwa'>('all');
   const [readerRankFilter, setReaderRankFilter] = useState<'all' | 'S' | 'A' | 'B' | 'C'>('all');
   const [readerTimeFilter, setReaderTimeFilter] = useState<'all' | '7d' | '30d'>('all');
+  const [readerGenreFilters, setReaderGenreFilters] = useState<Set<string>>(new Set());
   const [readerOpen, setReaderOpen] = useState<{ projectId: string; mode: "novel" | "manhwa" } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createTitle, setCreateTitle] = useState("");
@@ -49,6 +53,8 @@ export default function DashboardPage() {
   const [exportLoading, setExportLoading] = useState(false);
   const [exportAllDialog, setExportAllDialog] = useState(false);
   const [exportAllLoading, setExportAllLoading] = useState(false);
+  const [readerShareLoadingId, setReaderShareLoadingId] = useState<string | null>(null);
+
 
   const onSignOut = async () => {
     try {
@@ -107,7 +113,56 @@ export default function DashboardPage() {
     );
   }, [projects, query]);
 
-  // Reader-mode specific filtered list (query + mode + rank + timeframe)
+  const handleReaderShareToggle = useCallback(async (id: string) => {
+    const item = projects.find(p => p.id === id);
+    if (!item) return;
+    setReaderShareLoadingId(id);
+    try {
+      if (item.visibility === 'public') {
+        const res = await api.unpublishProject(id);
+        setProjects(prev => prev.map(p => p.id === id ? { ...p, visibility: res.visibility, publicSlug: (res as any).publicSlug ?? p.publicSlug } : p));
+      } else {
+        const res = await api.publishProject(id);
+        const slug = (res as any).publicSlug as string | undefined;
+        setProjects(prev => prev.map(p => p.id === id ? { ...p, visibility: res.visibility, publicSlug: slug || p.publicSlug } : p));
+        try {
+          const origin = typeof window !== 'undefined' ? window.location.origin : '';
+          if (origin && slug) {
+            const url = `${origin}/read/${slug}`;
+            await navigator.clipboard.writeText(url);
+          }
+        } catch {}
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setReaderShareLoadingId(null);
+    }
+  }, [api, projects]);
+
+  const handleReaderSetVisibility = useCallback(async (id: string, vis: 'private'|'public') => {
+    if (vis === 'public') {
+      await handleReaderShareToggle(id);
+      return;
+    }
+    if (vis === 'private') {
+      // Unpublish if needed
+      const item = projects.find(p => p.id === id);
+      if (!item) return;
+      setReaderShareLoadingId(id);
+      try {
+        const res = await api.unpublishProject(id);
+        setProjects(prev => prev.map(p => p.id === id ? { ...p, visibility: res.visibility } : p));
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setReaderShareLoadingId(null);
+      }
+      return;
+    }
+  }, [api, projects, handleReaderShareToggle]);
+
+  // Reader-mode specific filtered list (query + mode + rank + timeframe + genres)
   const readerFiltered = useMemo(() => {
     let list = projects;
     // Optional: reuse query if present
@@ -132,8 +187,15 @@ export default function DashboardPage() {
         return (now - t) <= maxAge * 24 * 60 * 60 * 1000;
       });
     }
+    // Genre filter - show projects that have at least one selected genre
+    if (readerGenreFilters.size > 0) {
+      list = list.filter(p => {
+        const projectGenres = (p.genres || []) as string[];
+        return projectGenres.some(g => readerGenreFilters.has(g));
+      });
+    }
     return list;
-  }, [projects, query, readerModeFilter, readerRankFilter, readerTimeFilter]);
+  }, [projects, query, readerModeFilter, readerRankFilter, readerTimeFilter, readerGenreFilters]);
 
   const startCreate = useCallback(() => {
     setCreateTitle("");
@@ -325,12 +387,17 @@ export default function DashboardPage() {
               onRankFilter={setReaderRankFilter}
               timeFilter={readerTimeFilter}
               onTimeFilter={setReaderTimeFilter}
+              genreFilters={readerGenreFilters}
+              onGenreFiltersChange={setReaderGenreFilters}
+              projects={projects}
             />
             <ReaderCenterVault
               items={readerFiltered}
               sort={readerSort}
               view={readerView}
               onRead={handleRead}
+              shareLoadingId={readerShareLoadingId}
+              onSetVisibility={handleReaderSetVisibility}
             />
             <RightControls
               sort={readerSort}
@@ -673,16 +740,49 @@ const RightActions = memo(function RightActions({ query, onQuery, onCreate, onEx
   );
 });
 
-function LeftLibrary({ modeFilter, onModeFilter, rankFilter, onRankFilter, timeFilter, onTimeFilter }: {
+
+function LeftLibrary({ modeFilter, onModeFilter, rankFilter, onRankFilter, timeFilter, onTimeFilter, genreFilters, onGenreFiltersChange, projects }: {
   modeFilter: 'all' | 'novel' | 'manhwa';
   onModeFilter: (m: 'all' | 'novel' | 'manhwa') => void;
   rankFilter: 'all' | 'S' | 'A' | 'B' | 'C';
   onRankFilter: (r: 'all' | 'S' | 'A' | 'B' | 'C') => void;
   timeFilter: 'all' | '7d' | '30d';
   onTimeFilter: (t: 'all' | '7d' | '30d') => void;
+  genreFilters: Set<string>;
+  onGenreFiltersChange: (filters: Set<string>) => void;
+  projects: ProjectItem[];
 }) {
+  const [genreExpanded, setGenreExpanded] = useState(false);
+
+  // Extract all unique genres from all projects
+  const allAvailableGenres = useMemo(() => {
+    const genreSet = new Set<string>();
+    projects.forEach(p => {
+      const projectGenres = (p.genres || []) as string[];
+      projectGenres.forEach(g => {
+        // Add the genre as-is (already individual from backend)
+        genreSet.add(g);
+      });
+    });
+    return Array.from(genreSet).sort();
+  }, [projects]);
+
+  const handleGenreToggle = (genre: string) => {
+    const newFilters = new Set(genreFilters);
+    if (newFilters.has(genre)) {
+      newFilters.delete(genre);
+    } else {
+      newFilters.add(genre);
+    }
+    onGenreFiltersChange(newFilters);
+  };
+
+  const handleClearGenres = () => {
+    onGenreFiltersChange(new Set());
+  };
+
   return (
-    <aside className="md:basis-1/5 bg-bg-elevated border border-border-default rounded-xl p-6 h-fit space-y-4 shadow-elevation">
+    <aside className="md:basis-1/5 bg-bg-elevated border border-border-default rounded-xl p-6 h-fit space-y-4 shadow-elevation max-h-[calc(100vh-6rem)] overflow-y-auto">
       <div className="text-sm font-semibold tracking-elegant">FILTERS</div>
       
       <div className="text-xs text-text-tertiary">Mode</div>
@@ -707,11 +807,57 @@ function LeftLibrary({ modeFilter, onModeFilter, rankFilter, onRankFilter, timeF
         <option value="7d">Last 7 days</option>
         <option value="30d">Last 30 days</option>
       </select>
+
+      <div className="border-t border-border-default pt-4">
+        <button
+          onClick={() => setGenreExpanded(!genreExpanded)}
+          className="w-full flex items-center justify-between text-xs text-text-tertiary hover:text-text-secondary transition-colors"
+        >
+          <span className="font-medium">Genres {genreFilters.size > 0 && `(${genreFilters.size})`}</span>
+          <svg
+            className={`w-4 h-4 transition-transform duration-200 ${genreExpanded ? 'rotate-180' : ''}`}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+          </svg>
+        </button>
+
+        {genreExpanded && (
+          <div className="mt-3 space-y-2">
+            {genreFilters.size > 0 && (
+              <button
+                onClick={handleClearGenres}
+                className="w-full text-xs text-accent hover:text-accent/80 transition-colors text-left py-1"
+              >
+                Clear all
+              </button>
+            )}
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {allAvailableGenres.map(genre => {
+                const isSelected = genreFilters.has(genre);
+                return (
+                  <label key={genre} className="flex items-center gap-2 text-xs cursor-pointer transition-colors hover:text-text-primary">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => handleGenreToggle(genre)}
+                      className="accent-accent rounded"
+                    />
+                    <span className="text-text-secondary">{genre}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
     </aside>
   );
 }
 
-function ReaderCenterVault({ items, sort, view, onRead }: { items: ProjectItem[]; sort: "recent" | "rank"; view: "list" | "gallery"; onRead: (id: string, mode?: ProjectItem["mode"]) => void; }) {
+function ReaderCenterVault({ items, sort, view, onRead, shareLoadingId, onSetVisibility }: { items: ProjectItem[]; sort: "recent" | "rank"; view: "list" | "gallery"; onRead: (id: string, mode?: ProjectItem["mode"]) => void; shareLoadingId: string | null; onSetVisibility: (id: string, vis: 'private'|'public') => void; }) {
   const [visible, setVisible] = useState(10);
 
   const sorted = useMemo(() => {
@@ -742,7 +888,14 @@ function ReaderCenterVault({ items, sort, view, onRead }: { items: ProjectItem[]
       <div onScroll={onScroll} className="h-[calc(100vh-14rem)] md:h-[calc(100vh-12rem)] overflow-y-auto pr-1 md:pr-2">
         <div className={view === 'gallery' ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4' : 'space-y-4'}>
           {sorted.slice(0, visible).map((p) => (
-            <ReaderCard key={p.id} item={p} onRead={onRead} view={view} />
+            <ReaderCard
+              key={p.id}
+              item={p}
+              onRead={onRead}
+              view={view}
+              shareLoading={shareLoadingId === p.id}
+              onSetVisibility={onSetVisibility}
+            />
           ))}
         </div>
         {visible < sorted.length && (
@@ -762,7 +915,7 @@ function ReaderCenterVault({ items, sort, view, onRead }: { items: ProjectItem[]
   );
 }
 
-const ReaderCard = memo(function ReaderCard({ item, onRead, view }: { item: ProjectItem; onRead: (id: string, mode?: ProjectItem["mode"]) => void; view: "list" | "gallery"; }) {
+const ReaderCard = memo(function ReaderCard({ item, onRead, view, shareLoading, onSetVisibility }: { item: ProjectItem; onRead: (id: string, mode?: ProjectItem["mode"]) => void; view: "list" | "gallery"; shareLoading: boolean; onSetVisibility: (id: string, vis: 'private'|'public') => void; }) {
   const supabase = useSupabase();
   const api = useMemo(() => createApi(supabase), [supabase]);
   const [chaptersCount, setChaptersCount] = useState<number | null>(null);
@@ -857,21 +1010,54 @@ const ReaderCard = memo(function ReaderCard({ item, onRead, view }: { item: Proj
         </div>
         <div className="flex flex-col gap-3">
           <div className="text-sm text-text-secondary leading-relaxed">{snippet || "No preview available."}</div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 relative">
             <button onClick={() => onRead(item.id, item.mode)} className="rounded-md bg-accent px-3 py-2 text-sm font-semibold text-black hover:bg-accent-hover hover:scale-105 transition-all duration-micro inline-flex items-center gap-1" title="Read Full">
               <BookOpen className="w-4 h-4" aria-hidden="true" />
               <span className="sr-only">Read Full</span>
             </button>
-            <button className="rounded-md border border-border-default px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:scale-105 transition-all duration-micro inline-flex items-center gap-1" disabled title="Share (coming soon)">
-              <Share2 className="w-4 h-4" aria-hidden="true" />
-              <span className="sr-only">Share</span>
-            </button>
+            <ShareMenu
+              visibility={item.visibility === 'public' ? 'public' : 'private'}
+              busy={shareLoading}
+              onSelect={(vis) => onSetVisibility(item.id, vis)}
+            />
           </div>
         </div>
       </div>
     </div>
   );
 });
+
+function ShareMenu({ visibility, busy, onSelect }: { visibility: 'private'|'public'; busy: boolean; onSelect: (v: 'private'|'public') => void; }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      if (!ref.current) return;
+      if (!ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
+  return (
+    <div className="relative" ref={ref}>
+      <button onClick={() => setOpen(v => !v)} disabled={busy} className="rounded-md border border-border-default px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:scale-105 transition-all duration-micro inline-flex items-center gap-2" title="Share & Visibility">
+        {busy ? (
+          <span className="inline-block w-4 h-4 border-2 border-accent/30 border-t-accent rounded-full animate-spin" aria-hidden="true" />
+        ) : (
+          <Share2 className="w-4 h-4" aria-hidden="true" />
+        )}
+        <span className="text-xs uppercase">{visibility}</span>
+      </button>
+      {open && (
+        <div className="absolute z-10 mt-2 w-44 rounded-md border border-border-default bg-bg-elevated shadow-elevation text-sm">
+          <div className="px-3 py-2 text-text-tertiary">Visibility: {visibility}</div>
+          <button className="w-full text-left px-3 py-2 hover:bg-bg-hover text-text-secondary transition-micro" disabled={busy} onClick={() => { setOpen(false); onSelect('public'); }}>Public</button>
+          <button className="w-full text-left px-3 py-2 hover:bg-bg-hover text-text-secondary transition-micro" disabled={busy} onClick={() => { setOpen(false); onSelect('private'); }}>Private</button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function RightControls({ sort, onSort, view, onView }: { sort: "recent" | "rank"; onSort: (s: "recent" | "rank") => void; view: "list" | "gallery"; onView: (v: "list" | "gallery") => void; }) {
   return (

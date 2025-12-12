@@ -52,8 +52,33 @@ export function createApi(supabase: SupabaseClient) {
     // Project settings
     updateProjectSettings: (
       id: string,
-      body: { title?: string; description?: string; coverImage?: string; genre?: string; coreConflict?: string; settingsJson?: any; mode?: 'novel' | 'manhwa' | 'convert' }
+      body: { title?: string; description?: string; coverImage?: string; genres?: string[]; coreConflict?: string; settingsJson?: any; mode?: 'novel' | 'manhwa' | 'convert' }
     ) => apiFetch<any>(supabase, `/api/project/${id}/settings`, { method: 'PATCH', body: JSON.stringify(body) }),
+
+    // Sharing
+    publishProject: (id: string) =>
+      apiFetch<{ id: string; visibility: 'public'|'private'|'unlisted'; publicSlug?: string|null; publishedAt?: string|null }>(supabase, `/api/project/${id}/share/publish`, { method: 'POST' }),
+    unpublishProject: (id: string) =>
+      apiFetch<{ id: string; visibility: 'public'|'private'|'unlisted'; publicSlug?: string|null; publishedAt?: string|null }>(supabase, `/api/project/${id}/share/unpublish`, { method: 'POST' }),
+    createUnlistedLink: (id: string) =>
+      apiFetch<{ id: string; token: string; createdAt: string }>(supabase, `/api/project/${id}/share/unlisted`, { method: 'POST' }),
+    revokeUnlistedLink: (id: string, token: string) =>
+      apiFetch<void>(supabase, `/api/project/${id}/share/unlisted/${encodeURIComponent(token)}`, { method: 'DELETE' }),
+
+    // Public read APIs (no auth required, but auth header is harmless)
+    getPublicProject: (slug: string) =>
+      apiFetch<any>(supabase, `/api/public/project/${encodeURIComponent(slug)}`),
+    getPublicChapters: (slug: string, page: number, limit: number) =>
+      apiFetch<{ items: any[]; total: number }>(supabase, `/api/public/project/${encodeURIComponent(slug)}/chapters?page=${encodeURIComponent(page)}&limit=${encodeURIComponent(limit)}`),
+    getPublicProjects: (page: number, limit: number, q?: string) =>
+      apiFetch<{ items: any[]; total: number }>(
+        supabase,
+        `/api/public/projects?page=${encodeURIComponent(page)}&limit=${encodeURIComponent(limit)}${q ? `&q=${encodeURIComponent(q)}` : ''}`
+      ),
+    getUnlistedProject: (token: string) =>
+      apiFetch<any>(supabase, `/api/public/u/${encodeURIComponent(token)}`),
+    getUnlistedChapters: (token: string, page: number, limit: number) =>
+      apiFetch<{ items: any[]; total: number }>(supabase, `/api/public/u/${encodeURIComponent(token)}/chapters?page=${encodeURIComponent(page)}&limit=${encodeURIComponent(limit)}`),
 
     // Chat
     // Legacy (per-project) - will be replaced by chatId-based endpoints

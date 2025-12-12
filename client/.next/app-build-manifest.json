@@ -11,15 +11,10 @@
       "static/css/app/layout.css",
       "static/chunks/app/layout.js"
     ],
-    "/project/[id]/chat/page": [
+    "/explore/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/project/[id]/chat/page.js"
-    ],
-    "/project/[id]/layout": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/project/[id]/layout.js"
+      "static/chunks/app/explore/page.js"
     ]
   }
 }
