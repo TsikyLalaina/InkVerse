@@ -562,7 +562,10 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     }).parse((req as any).query || {});
 
     // Owner access if authenticated
-    let accessProject = await prisma.project.findFirst({ where: { id: params.id, userId: user?.id || '' }, select: { id: true } });
+    let accessProject: any = null;
+    if (user?.id) {
+      accessProject = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true } });
+    }
     // Public access if not owner
     if (!accessProject) {
       const pub = await prisma.project.findFirst({ where: { id: params.id, visibility: 'public' as any }, select: { id: true } } as any);
@@ -970,36 +973,6 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     return reply.send(updated);
   });
 
-  // Create unlisted token
-  app.post('/project/:id/share/unlisted', async (req, reply) => {
-    const params = uuidParam.parse(req.params);
-    const user = (req as any).user;
-    if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
-    const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id } });
-    if (!project) return reply.code(404).send({ error: 'Not found' });
-    const token = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-    const created = await (prisma as any).projectShareToken.create({
-      data: { projectId: params.id, token },
-      select: { id: true, token: true, createdAt: true },
-    } as any);
-    try { await (prisma as any).project.update({ where: { id: params.id }, data: { visibility: 'unlisted' } } as any); } catch {}
-    return reply.code(201).send(created);
-  });
-
-  // Revoke unlisted token
-  app.delete('/project/:id/share/unlisted/:token', async (req, reply) => {
-    const params = z.object({ id: z.string().uuid(), token: z.string() }).parse(req.params as any);
-    const user = (req as any).user;
-    if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
-    const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true } });
-    if (!project) return reply.code(404).send({ error: 'Not found' });
-    const updated = await (prisma as any).projectShareToken.updateMany({
-      where: { projectId: params.id, token: (req as any).params.token, revokedAt: null },
-      data: { revokedAt: new Date() },
-    } as any);
-    if (!updated.count) return reply.code(404).send({ error: 'Not found' });
-    return reply.code(204).send();
-  });
 
   // Public read: by slug
   app.get('/public/project/:slug', async (req, reply) => {
@@ -1056,34 +1029,6 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     return reply.send({ items: enriched, total });
   });
 
-  // Public read: by unlisted token
-  app.get('/public/u/:token', async (req, reply) => {
-    const { token } = z.object({ token: z.string().min(1) }).parse(req.params as any);
-    const row = await (prisma as any).projectShareToken.findFirst({ where: { token, revokedAt: null }, select: { projectId: true } } as any);
-    if (!row) return reply.code(404).send({ error: 'Not found' });
-    const project = await prisma.project.findFirst({
-      where: { id: (row as any).projectId },
-      select: { id: true, title: true, description: true, coverImage: true, mode: true as any, genres: true as any, createdAt: true },
-    } as any);
-    if (!project) return reply.code(404).send({ error: 'Not found' });
-    return reply.send(project);
-  });
-
-  app.get('/public/u/:token/chapters', async (req, reply) => {
-    const { token } = z.object({ token: z.string().min(1) }).parse(req.params as any);
-    const qp = z.object({ page: z.coerce.number().int().min(0).default(0), limit: z.coerce.number().int().min(1).max(100).default(20) }).parse((req as any).query || {});
-    const row = await (prisma as any).projectShareToken.findFirst({ where: { token, revokedAt: null }, select: { projectId: true } } as any);
-    if (!row) return reply.code(404).send({ error: 'Not found' });
-    const total = await prisma.chapter.count({ where: { projectId: (row as any).projectId, isCanon: true as any } });
-    const items = await prisma.chapter.findMany({
-      where: { projectId: (row as any).projectId, isCanon: true as any },
-      orderBy: { createdAt: 'asc' },
-      skip: qp.page * qp.limit,
-      take: qp.limit,
-      select: { id: true, title: true, content: true, panelScript: true, createdAt: true },
-    });
-    return reply.send({ items, total });
-  });
 
   done();
 };

@@ -32,6 +32,23 @@ async function apiFetch<T = any>(
   return (await res.json()) as T;
 }
 
+async function publicApiFetch<T = any>(
+  input: string,
+  init: RequestInit = {}
+): Promise<T> {
+  const hasBody = init.body !== undefined && init.body !== null;
+  const baseHeaders = init.headers || {};
+  const headers = hasBody ? { 'Content-Type': 'application/json', ...baseHeaders } : baseHeaders;
+
+  const res = await fetch(`${API_BASE}${input}`, { ...init, headers });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`API ${res.status}: ${text}`);
+  }
+  if (res.status === 204) return undefined as unknown as T;
+  return (await res.json()) as T;
+}
+
 export function createApi(supabase: SupabaseClient) {
   return {
     // Projects CRUD
@@ -57,28 +74,19 @@ export function createApi(supabase: SupabaseClient) {
 
     // Sharing
     publishProject: (id: string) =>
-      apiFetch<{ id: string; visibility: 'public'|'private'|'unlisted'; publicSlug?: string|null; publishedAt?: string|null }>(supabase, `/api/project/${id}/share/publish`, { method: 'POST' }),
+      apiFetch<{ id: string; visibility: 'public'|'private'; publicSlug?: string|null; publishedAt?: string|null }>(supabase, `/api/project/${id}/share/publish`, { method: 'POST' }),
     unpublishProject: (id: string) =>
-      apiFetch<{ id: string; visibility: 'public'|'private'|'unlisted'; publicSlug?: string|null; publishedAt?: string|null }>(supabase, `/api/project/${id}/share/unpublish`, { method: 'POST' }),
-    createUnlistedLink: (id: string) =>
-      apiFetch<{ id: string; token: string; createdAt: string }>(supabase, `/api/project/${id}/share/unlisted`, { method: 'POST' }),
-    revokeUnlistedLink: (id: string, token: string) =>
-      apiFetch<void>(supabase, `/api/project/${id}/share/unlisted/${encodeURIComponent(token)}`, { method: 'DELETE' }),
+      apiFetch<{ id: string; visibility: 'public'|'private'; publicSlug?: string|null; publishedAt?: string|null }>(supabase, `/api/project/${id}/share/unpublish`, { method: 'POST' }),
 
-    // Public read APIs (no auth required, but auth header is harmless)
+    // Public read APIs (no auth required)
     getPublicProject: (slug: string) =>
-      apiFetch<any>(supabase, `/api/public/project/${encodeURIComponent(slug)}`),
+      publicApiFetch<any>(`/api/public/project/${encodeURIComponent(slug)}`),
     getPublicChapters: (slug: string, page: number, limit: number) =>
-      apiFetch<{ items: any[]; total: number }>(supabase, `/api/public/project/${encodeURIComponent(slug)}/chapters?page=${encodeURIComponent(page)}&limit=${encodeURIComponent(limit)}`),
+      publicApiFetch<{ items: any[]; total: number }>(`/api/public/project/${encodeURIComponent(slug)}/chapters?page=${encodeURIComponent(page)}&limit=${encodeURIComponent(limit)}`),
     getPublicProjects: (page: number, limit: number, q?: string) =>
-      apiFetch<{ items: any[]; total: number }>(
-        supabase,
+      publicApiFetch<{ items: any[]; total: number }>(
         `/api/public/projects?page=${encodeURIComponent(page)}&limit=${encodeURIComponent(limit)}${q ? `&q=${encodeURIComponent(q)}` : ''}`
       ),
-    getUnlistedProject: (token: string) =>
-      apiFetch<any>(supabase, `/api/public/u/${encodeURIComponent(token)}`),
-    getUnlistedChapters: (token: string, page: number, limit: number) =>
-      apiFetch<{ items: any[]; total: number }>(supabase, `/api/public/u/${encodeURIComponent(token)}/chapters?page=${encodeURIComponent(page)}&limit=${encodeURIComponent(limit)}`),
 
     // Chat
     // Legacy (per-project) - will be replaced by chatId-based endpoints

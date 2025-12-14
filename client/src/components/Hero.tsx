@@ -1,5 +1,8 @@
 "use client";
 
+import { useEffect, useState } from 'react';
+import { useSupabase } from '@/components/providers/SupabaseProvider';
+
 function OrnateCornersHero() {
   const common = "pointer-events-none absolute h-10 w-10 opacity-80";
   const stroke = encodeURIComponent('#7dd3fc');
@@ -26,6 +29,24 @@ import { motion } from 'framer-motion';
 import { useCallback, useRef } from 'react';
 
 export default function Hero({ titleClass, monoClass }: { titleClass: string; monoClass: string }) {
+  const supabase = useSupabase();
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        setIsLoggedIn(!!session);
+      } catch (error) {
+        console.error('Auth check failed:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    checkAuth();
+  }, [supabase]);
+
   const audioCtxRef = useRef<AudioContext | null>(null);
   const playBlip = useCallback((freq = 520, duration = 0.08) => {
     try {
@@ -111,7 +132,7 @@ export default function Hero({ titleClass, monoClass }: { titleClass: string; mo
 
               <div className="flex flex-wrap items-center gap-3">
                 <Link
-                  href="/auth/signup"
+                  href={isLoggedIn ? "/dashboard" : "/auth/signup"}
                   onMouseEnter={() => playBlip(640, 0.06)}
                   onClick={() => playBlip(760, 0.1)}
                   className={`${monoClass} rounded border border-cyan-400/60 bg-cyan-400/10 px-4 py-2 text-cyan-200 hover:bg-cyan-400/20 transition shadow-[0_0_16px_rgba(0,212,255,0.25)]`}
@@ -119,12 +140,20 @@ export default function Hero({ titleClass, monoClass }: { titleClass: string; mo
                   NOVEL WRITER
                 </Link>
                 <Link
-                  href="/auth/signup"
+                  href={isLoggedIn ? "/dashboard" : "/auth/signup"}
                   onMouseEnter={() => playBlip(540, 0.06)}
                   onClick={() => playBlip(720, 0.1)}
                   className={`${monoClass} rounded border border-cyan-400/60 bg-cyan-400/10 px-4 py-2 text-cyan-200 hover:bg-cyan-400/20 transition shadow-[0_0_16px_rgba(0,212,255,0.25)]`}
                 >
                   MANHWA CREATOR
+                </Link>
+                <Link
+                  href="/explore"
+                  onMouseEnter={() => playBlip(480, 0.06)}
+                  onClick={() => playBlip(640, 0.1)}
+                  className={`${monoClass} rounded border border-purple-400/60 bg-purple-400/10 px-4 py-2 text-purple-200 hover:bg-purple-400/20 transition shadow-[0_0_16px_rgba(168,85,247,0.25)]`}
+                >
+                  EXPLORE LIBRARY
                 </Link>
               </div>
 
@@ -132,14 +161,14 @@ export default function Hero({ titleClass, monoClass }: { titleClass: string; mo
 
               <div>
                 <Link
-                  href="/auth/signup"
+                  href={isLoggedIn ? "/dashboard" : "/auth/signup"}
                   onMouseEnter={() => playBlip(460, 0.08)}
                   onClick={() => playBlip(880, 0.12)}
                   className={`inline-flex items-center justify-center rounded-lg bg-cyan-400 px-5 py-3 font-semibold text-black hover:bg-cyan-300 transition ${
                     'shadow-[0_0_30px_rgba(0,212,255,0.5)]'
                   }`}
                 >
-                  ENTER THE GATE
+                  {isLoggedIn ? 'GO TO DASHBOARD' : 'ENTER THE GATE'}
                 </Link>
               </div>
             </div>

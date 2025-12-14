@@ -27,7 +27,7 @@ const port = Number(process.env.PORT) || 3000;
 
 // Protected API scope, keeps /health public
 app.register(async (instance) => {
-  instance.register(auth, { optional: false });
+  instance.register(auth, { optional: true });
   instance.register(projectRoutes);
   instance.register(chatRoutes);
   instance.register(generateRoutes);

@@ -2,8 +2,27 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
+import { useEffect, useState } from "react";
+import { useSupabase } from "@/components/providers/SupabaseProvider";
 
 export default function AwakenCTA() {
+  const supabase = useSupabase();
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        setIsLoggedIn(!!session);
+      } catch (error) {
+        console.error('Auth check failed:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    checkAuth();
+  }, [supabase]);
   return (
     <section className="relative w-full py-20 bg-gradient-to-b from-[#0A0A0A] to-[#0B0B12]">
       <div className="mx-auto max-w-5xl px-6 text-center">
@@ -23,14 +42,21 @@ export default function AwakenCTA() {
               ],
             }}
             transition={{ duration: 2.2, repeat: Infinity, ease: "easeInOut" }}
-            className="mt-8 inline-flex"
+            className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4"
           >
             <Link
-              href="/auth/signup"
-              className="inline-flex items-center gap-3 rounded-xl bg-cyan-400 px-8 py-4 text-black font-semibold hover:bg-cyan-300 transition shadow-[0_0_30px_rgba(0,212,255,0.6)]"
+              href={isLoggedIn ? "/dashboard" : "/auth/signup"}
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-3 rounded-xl bg-cyan-400 px-6 sm:px-8 py-3 sm:py-4 text-sm sm:text-base text-black font-semibold hover:bg-cyan-300 transition shadow-[0_0_30px_rgba(0,212,255,0.6)]"
             >
-              ENTER
+              {isLoggedIn ? 'DASHBOARD' : 'ENTER'}
               <span className="text-black/70">→</span>
+            </Link>
+            <Link
+              href="/explore"
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-3 rounded-xl bg-purple-500 px-6 sm:px-8 py-3 sm:py-4 text-sm sm:text-base text-white font-semibold hover:bg-purple-600 transition shadow-[0_0_30px_rgba(168,85,247,0.6)]"
+            >
+              EXPLORE
+              <span className="text-white/70">→</span>
             </Link>
           </motion.div>
 

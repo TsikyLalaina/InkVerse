@@ -54,7 +54,21 @@ export default function DashboardPage() {
   const [exportAllDialog, setExportAllDialog] = useState(false);
   const [exportAllLoading, setExportAllLoading] = useState(false);
   const [readerShareLoadingId, setReaderShareLoadingId] = useState<string | null>(null);
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [readerFiltersOpen, setReaderFiltersOpen] = useState(false);
+  const [readerControlsOpen, setReaderControlsOpen] = useState(false);
+  const [isLargeScreen, setIsLargeScreen] = useState(false);
 
+  // Check screen size on mount and resize
+  useEffect(() => {
+    const checkScreenSize = () => {
+      setIsLargeScreen(window.innerWidth >= 768);
+    };
+    checkScreenSize();
+    window.addEventListener('resize', checkScreenSize);
+    return () => window.removeEventListener('resize', checkScreenSize);
+  }, []);
 
   const onSignOut = async () => {
     try {
@@ -340,7 +354,7 @@ export default function DashboardPage() {
   if (!authChecked) return null;
 
   return (
-    <div className="relative h-screen overflow-hidden text-text-primary animate-in fade-in duration-300">
+    <div className="relative min-h-screen text-text-primary animate-in fade-in duration-300">
       <div className="absolute inset-0 bg-gradient-to-b from-bg-primary to-bg-elevated" />
       {overlay && (
         <div className="pointer-events-none absolute inset-0 opacity-30" style={{ backgroundImage: `linear-gradient(rgba(0,255,255,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(0,255,255,0.06) 1px, transparent 1px)`, backgroundSize: "32px 32px" }} />
@@ -348,8 +362,15 @@ export default function DashboardPage() {
       <div className="relative">
         <TopBar mode={mode} onModeChange={setMode} userInitial={userInitial} onSignOut={onSignOut} userStats={userStats} />
         {mode === "CREATE" ? (
-          <MainLayout>
-            <LeftStats projectsCount={projects.length} stats={userStats} />
+          <MainLayout
+            showToggleButtons
+            isCreateMode
+            onToggleStats={() => setStatsOpen(!statsOpen)}
+            onToggleControls={() => setActionsOpen(!actionsOpen)}
+            statsOpen={statsOpen}
+            controlsOpen={actionsOpen}
+          >
+            {(statsOpen || isLargeScreen) && <LeftStats projectsCount={projects.length} stats={userStats} />}
             <CenterProjects
               items={filtered}
               loading={loading}
@@ -369,28 +390,38 @@ export default function DashboardPage() {
                 }
               }}
             />
-            <RightActions
-              query={query}
-              onQuery={setQuery}
-              onCreate={startCreate}
-              onExportAll={() => setExportAllDialog(true)}
-              overlay={overlay}
-              onToggleOverlay={() => setOverlay(v => !v)}
-            />
+            {(actionsOpen || isLargeScreen) && (
+              <RightActions
+                query={query}
+                onQuery={setQuery}
+                onCreate={startCreate}
+                onExportAll={() => setExportAllDialog(true)}
+                overlay={overlay}
+                onToggleOverlay={() => setOverlay(v => !v)}
+              />
+            )}
           </MainLayout>
         ) : (
-          <MainLayout>
-            <LeftLibrary
-              modeFilter={readerModeFilter}
-              onModeFilter={setReaderModeFilter}
-              rankFilter={readerRankFilter}
-              onRankFilter={setReaderRankFilter}
-              timeFilter={readerTimeFilter}
-              onTimeFilter={setReaderTimeFilter}
-              genreFilters={readerGenreFilters}
-              onGenreFiltersChange={setReaderGenreFilters}
-              projects={projects}
-            />
+          <MainLayout
+            showToggleButtons
+            onToggleFilters={() => setReaderFiltersOpen(!readerFiltersOpen)}
+            onToggleControls={() => setReaderControlsOpen(!readerControlsOpen)}
+            filtersOpen={readerFiltersOpen}
+            controlsOpen={readerControlsOpen}
+          >
+            {(readerFiltersOpen || isLargeScreen) && (
+              <LeftLibrary
+                modeFilter={readerModeFilter}
+                onModeFilter={setReaderModeFilter}
+                rankFilter={readerRankFilter}
+                onRankFilter={setReaderRankFilter}
+                timeFilter={readerTimeFilter}
+                onTimeFilter={setReaderTimeFilter}
+                genreFilters={readerGenreFilters}
+                onGenreFiltersChange={setReaderGenreFilters}
+                projects={projects}
+              />
+            )}
             <ReaderCenterVault
               items={readerFiltered}
               sort={readerSort}
@@ -399,12 +430,14 @@ export default function DashboardPage() {
               shareLoadingId={readerShareLoadingId}
               onSetVisibility={handleReaderSetVisibility}
             />
-            <RightControls
-              sort={readerSort}
-              onSort={setReaderSort}
-              view={readerView}
-              onView={setReaderView}
-            />
+            {(readerControlsOpen || isLargeScreen) && (
+              <RightControls
+                sort={readerSort}
+                onSort={setReaderSort}
+                view={readerView}
+                onView={setReaderView}
+              />
+            )}
           </MainLayout>
         )}
         {readerOpen && (
@@ -589,10 +622,38 @@ function TopBar({ mode, onModeChange, userInitial, onSignOut, userStats }: { mod
   );
 }
 
-function MainLayout({ children }: { children: React.ReactNode }) {
+function MainLayout({ children, showToggleButtons, onToggleStats, onToggleFilters, onToggleControls, statsOpen, filtersOpen, controlsOpen, isCreateMode }: { children: React.ReactNode; showToggleButtons?: boolean; onToggleStats?: () => void; onToggleFilters?: () => void; onToggleControls?: () => void; statsOpen?: boolean; filtersOpen?: boolean; controlsOpen?: boolean; isCreateMode?: boolean; }) {
   return (
     <div className="pt-14">
-      <div className="mx-auto max-w-7xl flex flex-col md:flex-row gap-6 px-6 py-8">
+      {showToggleButtons && (
+        <div className="md:hidden mx-auto max-w-7xl px-6 py-2 flex gap-2">
+          {onToggleStats && (
+            <button
+              onClick={onToggleStats}
+              className="flex-1 rounded-md bg-bg-elevated border border-border-default px-3 py-2 text-sm font-semibold text-text-primary hover:bg-bg-hover transition-colors"
+            >
+              {statsOpen ? '✕ Hide Stats' : '⊕ Show Stats'}
+            </button>
+          )}
+          {onToggleFilters && (
+            <button
+              onClick={onToggleFilters}
+              className="flex-1 rounded-md bg-bg-elevated border border-border-default px-3 py-2 text-sm font-semibold text-text-primary hover:bg-bg-hover transition-colors"
+            >
+              {filtersOpen ? '✕ Hide Filters' : '⊕ Show Filters'}
+            </button>
+          )}
+          {onToggleControls && (
+            <button
+              onClick={onToggleControls}
+              className="flex-1 rounded-md bg-bg-elevated border border-border-default px-3 py-2 text-sm font-semibold text-text-primary hover:bg-bg-hover transition-colors"
+            >
+              {isCreateMode ? (controlsOpen ? '✕ Hide Quick Actions' : '⊕ Show Quick Actions') : (controlsOpen ? '✕ Hide Controls' : '⊕ Show Controls')}
+            </button>
+          )}
+        </div>
+      )}
+      <div className="mx-auto max-w-7xl flex flex-col md:flex-row gap-6 px-6 py-8 min-h-[calc(100vh-6.5rem)] md:h-[calc(100vh-2rem)]">
         {children}
       </div>
     </div>
@@ -608,7 +669,7 @@ function LeftStats({ projectsCount, stats }: { projectsCount: number; stats: any
   const wordsCount = stats?.totalWordsWritten || 0;
 
   return (
-    <aside className="md:basis-1/5 bg-bg-elevated border border-border-default rounded-xl p-6 h-fit shadow-elevation">
+    <aside className="w-full md:basis-1/5 bg-bg-elevated border border-border-default rounded-xl p-6 h-fit shadow-elevation">
       <div className="text-sm font-semibold mb-4 tracking-elegant">STATS</div>
       <div className="space-y-3 text-sm">
         <div className="flex items-center justify-between"><span className="text-text-secondary">Level</span><span className="text-text-primary">{level}</span></div>
@@ -630,11 +691,11 @@ function LeftStats({ projectsCount, stats }: { projectsCount: number; stats: any
 
 function CenterProjects({ items, loading, error, onOpen, onBranch, onExport, onCreate, onDelete }: { items: ProjectItem[]; loading: boolean; error: string | null; onOpen: (id: string) => void; onBranch: (id: string) => void; onExport: (id: string) => void; onCreate: () => void; onDelete: (id: string) => void; }) {
   return (
-    <section className="md:basis-3/5 flex-1 overflow-hidden">
+    <section className="w-full md:basis-3/5 flex-1 overflow-hidden flex flex-col">
       <div className="mb-3">
         <div className="text-sm font-semibold tracking-elegant">PROJECT FORGE</div>
       </div>
-      <div className="h-[calc(100vh-14rem)] md:h-[calc(100vh-12rem)] overflow-y-auto pr-1 md:pr-2 space-y-4">
+      <div className="flex-1 overflow-y-auto pr-1 md:pr-2 space-y-4">
         {error && <div className="text-sm text-red-400 p-4 rounded-lg bg-red-950/20 border border-red-500/20">{error}</div>}
         {loading && !items.length ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
@@ -672,35 +733,39 @@ const ProjectCard = memo(function ProjectCard({ item, onOpen, onBranch, onExport
   const rel = useMemo(() => relTime(item.createdAt), [item.createdAt]);
   const meta = `${labelMode(item.mode)} • ${"—"} Chapters • ${rel}`;
   return (
-    <div className="rounded-xl border border-border-default bg-bg-elevated p-6 hover:shadow-elevation hover:scale-[1.01] transition-all duration-micro">
-      <div className="text-base font-semibold text-text-primary mb-1">{item.title}</div>
-      <div className="text-xs text-text-tertiary">{meta}</div>
-      <div className="mt-6 grid grid-cols-[minmax(160px,200px)_1fr] gap-6 items-start">
-        <div className="relative w-full pt-[133%] overflow-hidden rounded-lg border border-border-default bg-bg-primary group-hover:border-accent/30 transition-colors">
+    <div className="rounded-xl border border-border-default bg-bg-elevated p-2 sm:p-6 hover:shadow-elevation hover:scale-[1.01] transition-all duration-micro">
+      <div className="text-xs sm:text-base font-semibold text-text-primary mb-0.5 sm:mb-1 line-clamp-1">{item.title}</div>
+      <div className="text-xs text-text-tertiary line-clamp-1">{meta}</div>
+      <div className="mt-2 sm:mt-6 flex flex-col md:grid md:grid-cols-[minmax(160px,200px)_1fr] gap-2 sm:gap-6 items-center md:items-start w-full">
+        <div className="relative w-1/2 sm:w-full pt-[66%] sm:pt-[133%] overflow-hidden rounded-lg border-0 sm:border sm:border-border-default bg-transparent sm:bg-bg-primary group-hover:border-accent/30 transition-colors">
           {item.coverImage ? (
-            <img src={item.coverImage} alt={item.title} className="absolute inset-0 w-full h-full object-cover" />
+            <img src={item.coverImage} alt={item.title} className="absolute inset-0 w-full h-full object-contain sm:object-cover" />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center">
               <BookOpen className="w-12 h-12 text-text-tertiary/30" />
             </div>
           )}
         </div>
-        <div className="flex items-center gap-3">
-          <button onClick={() => onOpen(item.id)} className="rounded-md bg-accent px-3 py-2 text-sm font-semibold text-black hover:bg-accent-hover hover:scale-105 transition-all duration-micro inline-flex items-center gap-1" title="Open">
+        <div className="flex flex-wrap gap-2 md:flex-nowrap md:items-center md:gap-3">
+          <button onClick={() => onOpen(item.id)} className="flex-1 md:flex-none rounded-md bg-accent px-3 py-2 text-sm font-semibold text-black hover:bg-accent-hover hover:scale-105 transition-all duration-micro inline-flex items-center justify-center md:justify-start gap-1" title="Open">
             <FolderOpen className="w-4 h-4" aria-hidden="true" />
-            <span className="sr-only">Open</span>
+            <span className="hidden md:inline">Open</span>
+            <span className="md:hidden sr-only">Open</span>
           </button>
-          <button onClick={() => onBranch(item.id)} className="rounded-md border border-border-default px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:scale-105 transition-all duration-micro inline-flex items-center gap-1" disabled title="Branch (coming soon)">
+          <button onClick={() => onBranch(item.id)} className="flex-1 md:flex-none rounded-md border border-border-default px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:scale-105 transition-all duration-micro inline-flex items-center justify-center md:justify-start gap-1" disabled title="Branch (coming soon)">
             <GitBranch className="w-4 h-4" aria-hidden="true" />
-            <span className="sr-only">Branch</span>
+            <span className="hidden md:inline">Branch</span>
+            <span className="md:hidden sr-only">Branch</span>
           </button>
-          <button onClick={() => onExport(item.id)} className="rounded-md border border-border-default px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:scale-105 transition-all duration-micro inline-flex items-center gap-1" title="Export as Markdown">
+          <button onClick={() => onExport(item.id)} className="flex-1 md:flex-none rounded-md border border-border-default px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:scale-105 transition-all duration-micro inline-flex items-center justify-center md:justify-start gap-1" title="Export as Markdown">
             <Download className="w-4 h-4" aria-hidden="true" />
-            <span className="sr-only">Export</span>
+            <span className="hidden md:inline">Export</span>
+            <span className="md:hidden sr-only">Export</span>
           </button>
-          <button onClick={() => onDelete(item.id)} className="rounded-md border border-red-500/40 text-red-400 hover:bg-red-950/30 hover:scale-105 transition-all duration-micro px-3 py-2 text-sm inline-flex items-center gap-1" title="Delete">
+          <button onClick={() => onDelete(item.id)} className="flex-1 md:flex-none rounded-md border border-red-500/40 text-red-400 hover:bg-red-950/30 hover:scale-105 transition-all duration-micro px-3 py-2 text-sm inline-flex items-center justify-center md:justify-start gap-1" title="Delete">
             <Trash2 className="w-4 h-4" aria-hidden="true" />
-            <span className="sr-only">Delete</span>
+            <span className="hidden md:inline">Delete</span>
+            <span className="md:hidden sr-only">Delete</span>
           </button>
         </div>
       </div>
@@ -716,7 +781,7 @@ const RightActions = memo(function RightActions({ query, onQuery, onCreate, onEx
     return () => clearTimeout(id);
   }, [local, onQuery]);
   return (
-    <aside className="md:basis-1/5 bg-bg-elevated border border-border-default rounded-xl p-6 h-fit space-y-4 shadow-elevation">
+    <aside className="w-full md:basis-1/5 bg-bg-elevated border border-border-default rounded-xl p-6 h-fit space-y-4 shadow-elevation">
       <div className="text-sm font-semibold tracking-elegant">QUICK ACTIONS</div>
       <button className="w-full rounded-md bg-accent px-3 py-2 text-sm font-semibold text-black hover:bg-accent-hover hover:scale-[1.02] transition-all duration-micro inline-flex items-center justify-center gap-2" onClick={onCreate} title="New">
         <Plus className="w-4 h-4" aria-hidden="true" />
@@ -782,7 +847,7 @@ function LeftLibrary({ modeFilter, onModeFilter, rankFilter, onRankFilter, timeF
   };
 
   return (
-    <aside className="md:basis-1/5 bg-bg-elevated border border-border-default rounded-xl p-6 h-fit space-y-4 shadow-elevation max-h-[calc(100vh-6rem)] overflow-y-auto">
+    <aside className="w-full md:basis-1/5 bg-bg-elevated border border-border-default rounded-xl p-6 h-fit space-y-4 shadow-elevation max-h-none md:max-h-[calc(100vh-6rem)] overflow-y-auto">
       <div className="text-sm font-semibold tracking-elegant">FILTERS</div>
       
       <div className="text-xs text-text-tertiary">Mode</div>
@@ -963,19 +1028,19 @@ const ReaderCard = memo(function ReaderCard({ item, onRead, view, shareLoading, 
   if (view === 'gallery') {
     return (
       <div ref={cardRef} className="rounded-xl border border-border-default bg-bg-elevated overflow-hidden hover:shadow-elevation hover:scale-[1.02] transition-all duration-micro flex flex-col">
-        <div className="relative w-full pt-[133%] overflow-hidden bg-bg-primary">
+        <div className="relative w-1/2 sm:w-full pt-[66%] sm:pt-[133%] overflow-hidden rounded-lg border-0 sm:border-0 bg-transparent sm:bg-bg-primary mx-auto sm:mx-0">
           {item.coverImage ? (
-            <img src={item.coverImage} alt={item.title} className="absolute inset-0 w-full h-full object-cover" />
+            <img src={item.coverImage} alt={item.title} className="absolute inset-0 w-full h-full object-contain sm:object-cover" />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center">
               <BookOpen className="w-12 h-12 text-text-tertiary/30" />
             </div>
           )}
         </div>
-        <div className="p-4 flex flex-col gap-3 flex-1">
+        <div className="p-2 sm:p-4 flex flex-col gap-2 sm:gap-3 flex-1">
           <div className="flex items-start gap-2">
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-semibold text-text-primary truncate">{item.title}</div>
+              <div className="text-xs sm:text-sm font-semibold text-text-primary truncate">{item.title}</div>
               <div className="text-xs text-text-tertiary">{labelMode(item.mode)}</div>
             </div>
             <span className={`px-2 py-0.5 rounded text-xs font-bold flex-shrink-0 ${rankColors[rank]}`}>{rank}</span>
@@ -1008,9 +1073,9 @@ const ReaderCard = memo(function ReaderCard({ item, onRead, view, shareLoading, 
             </div>
           )}
         </div>
-        <div className="flex flex-col gap-3">
-          <div className="text-sm text-text-secondary leading-relaxed">{snippet || "No preview available."}</div>
-          <div className="flex items-center gap-3 relative">
+        <div className="flex flex-col gap-3 flex-1">
+          <div className="text-sm text-text-secondary leading-relaxed line-clamp-2 max-h-[2.5rem]">{snippet || "No preview available."}</div>
+          <div className="flex items-center gap-3 relative mt-auto">
             <button onClick={() => onRead(item.id, item.mode)} className="rounded-md bg-accent px-3 py-2 text-sm font-semibold text-black hover:bg-accent-hover hover:scale-105 transition-all duration-micro inline-flex items-center gap-1" title="Read Full">
               <BookOpen className="w-4 h-4" aria-hidden="true" />
               <span className="sr-only">Read Full</span>
@@ -1061,7 +1126,7 @@ function ShareMenu({ visibility, busy, onSelect }: { visibility: 'private'|'publ
 
 function RightControls({ sort, onSort, view, onView }: { sort: "recent" | "rank"; onSort: (s: "recent" | "rank") => void; view: "list" | "gallery"; onView: (v: "list" | "gallery") => void; }) {
   return (
-    <aside className="md:basis-1/5 bg-bg-elevated border border-border-default rounded-xl p-6 h-fit space-y-4 shadow-elevation">
+    <aside className="w-full md:basis-1/5 bg-bg-elevated border border-border-default rounded-xl p-6 h-fit space-y-4 shadow-elevation">
       <div className="text-sm font-semibold tracking-elegant">CONTROLS</div>
       <div className="text-xs text-text-tertiary">Sort</div>
       <select value={sort} onChange={(e) => onSort(e.target.value as any)} className="w-full rounded-md bg-bg-primary border border-border-default px-3 py-2 text-sm text-text-primary focus:border-accent transition-colors duration-micro">
@@ -1101,7 +1166,17 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
   const [savingBookmarkId, setSavingBookmarkId] = useState<string | null>(null);
   const [deletingBookmarkId, setDeletingBookmarkId] = useState<string | null>(null);
   const [targetScrollPct, setTargetScrollPct] = useState<number | null>(null);
+  const [isLargeScreen, setIsLargeScreen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const checkScreenSize = () => {
+      setIsLargeScreen(window.innerWidth >= 768);
+    };
+    checkScreenSize();
+    window.addEventListener('resize', checkScreenSize);
+    return () => window.removeEventListener('resize', checkScreenSize);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -1146,22 +1221,22 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
 
   return (
     <div ref={wrapRef} className="fixed inset-0 z-30 bg-bg-primary/95 backdrop-blur-soft">
-      <div className="h-12 border-b border-border-default px-4 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="text-sm text-text-primary">Mode</div>
+      <div className="h-12 md:h-12 border-b border-border-default px-3 md:px-4 flex items-center justify-between gap-2 md:gap-4 overflow-x-auto">
+        <div className="flex items-center gap-1 md:gap-2 flex-shrink-0">
+          <div className="text-xs md:text-sm text-text-primary hidden sm:block">Mode</div>
           <div className="bg-bg-hover/60 rounded-full p-1 flex text-xs">
-            <button className={`px-3 py-1 rounded-full transition-micro ${mode === 'novel' ? 'bg-accent text-black font-semibold' : 'text-text-secondary hover:text-text-primary'}`} onClick={() => setMode('novel')}>Novel</button>
-            <button className={`px-3 py-1 rounded-full transition-micro ${mode === 'manhwa' ? 'bg-accent text-black font-semibold' : 'text-text-secondary hover:text-text-primary'}`} onClick={() => setMode('manhwa')}>Manhwa</button>
+            <button className={`px-2 md:px-3 py-1 rounded-full transition-micro text-xs md:text-sm ${mode === 'novel' ? 'bg-accent text-black font-semibold' : 'text-text-secondary hover:text-text-primary'}`} onClick={() => setMode('novel')}>Novel</button>
+            <button className={`px-2 md:px-3 py-1 rounded-full transition-micro text-xs md:text-sm ${mode === 'manhwa' ? 'bg-accent text-black font-semibold' : 'text-text-secondary hover:text-text-primary'}`} onClick={() => setMode('manhwa')}>Manhwa</button>
           </div>
-          <div className="ml-2 flex items-center gap-2 text-xs">
-            <button onClick={() => setLeftCollapsed(v => !v)} className="rounded-md border border-border-default px-2 py-1 text-text-secondary hover:bg-bg-hover transition-micro">{leftCollapsed ? 'Show Left' : 'Hide Left'}</button>
-            <button onClick={() => setRightCollapsed(v => !v)} className="rounded-md border border-border-default px-2 py-1 text-text-secondary hover:bg-bg-hover transition-micro">{rightCollapsed ? 'Show Right' : 'Hide Right'}</button>
+          <div className="ml-1 md:ml-2 flex items-center gap-1 md:gap-2 text-xs">
+            <button onClick={() => setLeftCollapsed(v => !v)} className="rounded-md border border-border-default px-1.5 md:px-2 py-1 text-text-secondary hover:bg-bg-hover transition-micro text-xs">{leftCollapsed ? 'L' : 'L'}</button>
+            <button onClick={() => setRightCollapsed(v => !v)} className="rounded-md border border-border-default px-1.5 md:px-2 py-1 text-text-secondary hover:bg-bg-hover transition-micro text-xs">{rightCollapsed ? 'R' : 'R'}</button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={toggleFs} className="rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro">{fs ? 'Exit Full' : 'Full-Screen'}</button>
-          <button className="rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro" disabled>Settings</button>
-          <button onClick={onClose} className="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-black hover:bg-accent-hover transition-micro">Exit Reader</button>
+        <div className="flex items-center gap-1 md:gap-2 flex-shrink-0">
+          <button onClick={toggleFs} className="rounded-md border border-border-default px-2 md:px-3 py-1 md:py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro hidden sm:block">{fs ? 'Exit' : 'Full'}</button>
+          <button className="rounded-md border border-border-default px-2 md:px-3 py-1 md:py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro hidden md:block" disabled>Settings</button>
+          <button onClick={onClose} className="rounded-md bg-accent px-2 md:px-3 py-1 md:py-1.5 text-xs font-semibold text-black hover:bg-accent-hover transition-micro">Exit</button>
         </div>
       </div>
       <div className="grid grid-rows-[1fr_auto] h-[calc(100%-3rem)] min-h-0">
@@ -1169,15 +1244,15 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
           className={
             `grid h-full min-h-0 ` +
             (
-              leftCollapsed && rightCollapsed ? 'md:grid-cols-[1fr]' :
-              leftCollapsed && !rightCollapsed ? 'md:grid-cols-[1fr_260px]' :
-              !leftCollapsed && rightCollapsed ? 'md:grid-cols-[260px_1fr]' :
-              'md:grid-cols-[260px_1fr_260px]'
+              leftCollapsed && rightCollapsed ? 'grid-cols-[1fr]' :
+              leftCollapsed && !rightCollapsed ? 'md:grid-cols-[1fr_260px] grid-cols-[1fr]' :
+              !leftCollapsed && rightCollapsed ? 'md:grid-cols-[260px_1fr] grid-cols-[1fr]' :
+              'md:grid-cols-[260px_1fr_260px] grid-cols-[1fr]'
             )
           }
         >
           {!leftCollapsed && (
-          <aside className="border-r border-border-default overflow-y-auto p-3 hidden md:block bg-bg-elevated">
+          <aside className="border-r border-border-default overflow-y-auto p-2 md:p-3 bg-bg-elevated w-full md:w-auto">
             <div className="text-xs text-text-tertiary mb-2">Chapter List</div>
             <div className="flex flex-col gap-1">
               {chapters.map((c) => (
@@ -1208,7 +1283,7 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
             </div>
           </main>
           {!rightCollapsed && (
-          <aside className="border-l border-border-default overflow-hidden hidden md:flex flex-col bg-bg-elevated">
+          <aside className="border-l border-border-default overflow-hidden flex flex-col bg-bg-elevated w-full md:w-auto">
             <div className="flex-1 overflow-y-auto">
               {editingBookmarkId ? (
                 <div className="p-4 space-y-3 border-b border-border-default">
@@ -1290,7 +1365,7 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
                             setEditName(bm.name);
                             setEditDescription(bm.description || '');
                           }}
-                          className="opacity-0 group-hover:opacity-100 p-1 text-text-secondary hover:text-accent transition-micro"
+                          className="opacity-100 md:opacity-0 md:group-hover:opacity-100 p-1 text-text-secondary hover:text-accent transition-micro"
                           title="Edit"
                         >
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1312,7 +1387,7 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
                             }
                           }}
                           disabled={deletingBookmarkId === bm.id}
-                          className="opacity-0 group-hover:opacity-100 p-1 text-text-secondary hover:text-red-500 transition-micro disabled:opacity-50"
+                          className="opacity-100 md:opacity-0 md:group-hover:opacity-100 p-1 text-text-secondary hover:text-red-500 transition-micro disabled:opacity-50"
                           title="Delete"
                         >
                           {deletingBookmarkId === bm.id ? (
@@ -1335,12 +1410,15 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
           </aside>
           )}
         </div>
-        <div className="h-14 border-t border-border-default px-4 flex items-center gap-3 bg-bg-elevated">
-          <div className="text-xs text-text-tertiary">Progress</div>
-          <div className="flex-1 h-2 bg-bg-hover rounded-full overflow-hidden">
-            <div className="h-full bg-accent transition-all duration-300" style={{ width: `${progress}%` }} />
+        <div className="h-auto md:h-14 border-t border-border-default px-3 md:px-4 py-2 md:py-0 flex flex-col md:flex-row items-start md:items-center gap-2 md:gap-3 bg-bg-elevated">
+          <div className="flex items-center gap-2 w-full md:flex-1">
+            <div className="text-xs text-text-tertiary flex-shrink-0">Progress</div>
+            <div className="flex-1 h-2 bg-bg-hover rounded-full overflow-hidden">
+              <div className="h-full bg-accent transition-all duration-300" style={{ width: `${progress}%` }} />
+            </div>
+            <div className="text-xs text-text-secondary w-10 text-right flex-shrink-0">{progress}%</div>
           </div>
-          <div className="text-xs text-text-secondary w-12 text-right">{progress}%</div>
+          <div className="flex items-center gap-1 md:gap-2 w-full md:w-auto">
           <button
             className="rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro disabled:opacity-50"
             onClick={() => {
@@ -1367,8 +1445,9 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
             }}
             disabled={mode === 'manhwa' ? (panelTotal <= 0 || panelIdx >= panelTotal - 1) : (chapters.length === 0 || chapters.findIndex(c => c.id === activeCh) >= chapters.length - 1)}
           >Next</button>
+          </div>
           <button
-            className="rounded-md border border-accent bg-accent/20 px-3 py-1.5 text-xs text-accent hover:bg-accent/30 transition-micro disabled:opacity-50"
+            className="rounded-md border border-accent bg-accent/20 px-2 md:px-3 py-1 md:py-1.5 text-xs text-accent hover:bg-accent/30 transition-micro disabled:opacity-50 w-full md:w-auto"
             onClick={async () => {
               setBookmarkLoading(true);
               try {
