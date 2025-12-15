@@ -338,9 +338,7 @@ export function Chat({ chatId, projectId, chatType = 'plot', initialMessages = [
               draggable={Boolean(m.panelId)}
             />)
           )}
-          {streaming && (
-            <div className="text-sm text-text-secondary animate-pulse">AI is typing…</div>
-          )}
+          {/* Removed typing animation indicator per request */}
         </div>
 
       {toastMsg && (

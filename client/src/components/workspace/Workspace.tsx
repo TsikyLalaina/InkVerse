@@ -1031,11 +1031,7 @@ export function Workspace({ projectId }: { projectId: string }) {
             ) : (
               <div className="flex-1 grid place-items-center text-xs text-text-tertiary">Open the chat menu to create or select a chat.</div>
             )}
-            {chatLoading && (
-              <div className="absolute inset-0 z-10 grid place-items-center bg-bg-primary/60">
-                <Loader2 className="w-5 h-5 animate-spin text-text-secondary" aria-hidden="true" />
-              </div>
-            )}
+            {/* loading overlay hidden on mobile */}
           </div>
         </aside>
         )}
@@ -1179,11 +1175,7 @@ export function Workspace({ projectId }: { projectId: string }) {
             ) : (
               <div className="flex-1 grid place-items-center text-xs text-text-tertiary">Open the chat menu to create or select a chat.</div>
             )}
-            {chatLoading && (
-              <div className="absolute inset-0 z-10 grid place-items-center bg-bg-primary/60">
-                <Loader2 className="w-5 h-5 animate-spin text-text-secondary" aria-hidden="true" />
-              </div>
-            )}
+            {/* loading overlay removed */}
           </div>
         </aside>
       )}
