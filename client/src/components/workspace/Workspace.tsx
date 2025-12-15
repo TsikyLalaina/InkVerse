@@ -98,6 +98,7 @@ export function Workspace({ projectId }: { projectId: string }) {
   const [leftWidth, setLeftWidth] = useState<number>(260);
   const [rightWidth, setRightWidth] = useState<number>(260);
   const [isMobile, setIsMobile] = useState(false);
+  const [chatLoading, setChatLoading] = useState(false);
 
   // Detect mobile screen size
   useEffect(() => {
@@ -999,7 +1000,7 @@ export function Workspace({ projectId }: { projectId: string }) {
                   )}
                   {chats.map((c) => (
                     <div key={c.id} className={`group w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md mb-1 transition-all duration-150 ${activeChatId===c.id ? 'bg-bg-hover' : 'hover:bg-bg-hover'}`}>
-                      <button className="flex-1 text-left" onClick={() => { setActiveChatId(c.id); setChatMenuOpen(false); }}>
+                      <button className="flex-1 text-left" onClick={() => { setChatLoading(true); setActiveChatId(c.id); setChatMenuOpen(false); }}>
                         <div className="text-[10px] uppercase text-text-tertiary mb-0.5">{c.type}</div>
                         <div className={`text-sm font-medium ${activeChatId===c.id ? 'text-text-primary' : 'text-text-secondary'}`}>{c.title}</div>
                       </button>
@@ -1018,15 +1019,22 @@ export function Workspace({ projectId }: { projectId: string }) {
             </div>
           )}
           {/* Chat view fills the sidebar */}
-          <div className="flex-1 overflow-hidden border-t border-border-default flex flex-col">
+          <div className="relative flex-1 overflow-hidden border-t border-border-default flex flex-col">
             {activeChatId ? (
               <Chat
+                key={activeChatId || 'none'}
                 chatId={activeChatId}
                 projectId={projectId}
                 chatType={(chats.find(c => c.id === activeChatId)?.type) || 'plot'}
+                onLoadingChange={(v) => setChatLoading(Boolean(v))}
               />
             ) : (
               <div className="flex-1 grid place-items-center text-xs text-text-tertiary">Open the chat menu to create or select a chat.</div>
+            )}
+            {chatLoading && (
+              <div className="absolute inset-0 z-10 grid place-items-center bg-bg-primary/60">
+                <Loader2 className="w-5 h-5 animate-spin text-text-secondary" aria-hidden="true" />
+              </div>
             )}
           </div>
         </aside>
@@ -1140,7 +1148,7 @@ export function Workspace({ projectId }: { projectId: string }) {
                   )}
                   {chats.map((c) => (
                     <div key={c.id} className={`group w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md mb-1 transition-all duration-150 ${activeChatId===c.id ? 'bg-bg-hover' : 'hover:bg-bg-hover'}`}>
-                      <button className="flex-1 text-left" onClick={() => { setActiveChatId(c.id); setChatMenuOpen(false); }}>
+                      <button className="flex-1 text-left" onClick={() => { setChatLoading(true); setActiveChatId(c.id); setChatMenuOpen(false); }}>
                         <div className="text-[10px] uppercase text-text-tertiary mb-0.5">{c.type}</div>
                         <div className={`text-sm font-medium ${activeChatId===c.id ? 'text-text-primary' : 'text-text-secondary'}`}>{c.title}</div>
                       </button>
@@ -1159,15 +1167,22 @@ export function Workspace({ projectId }: { projectId: string }) {
             </div>
           )}
           {/* Chat view fills the sidebar */}
-          <div className="flex-1 overflow-hidden border-t border-border-default flex flex-col">
+          <div className="relative flex-1 overflow-hidden border-t border-border-default flex flex-col">
             {activeChatId ? (
               <Chat
+                key={activeChatId || 'none'}
                 chatId={activeChatId}
                 projectId={projectId}
                 chatType={(chats.find(c => c.id === activeChatId)?.type) || 'plot'}
+                onLoadingChange={(v) => setChatLoading(Boolean(v))}
               />
             ) : (
               <div className="flex-1 grid place-items-center text-xs text-text-tertiary">Open the chat menu to create or select a chat.</div>
+            )}
+            {chatLoading && (
+              <div className="absolute inset-0 z-10 grid place-items-center bg-bg-primary/60">
+                <Loader2 className="w-5 h-5 animate-spin text-text-secondary" aria-hidden="true" />
+              </div>
             )}
           </div>
         </aside>

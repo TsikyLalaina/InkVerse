@@ -17,7 +17,7 @@ export type ChatMessage = {
   imageUrl?: string | null;
 };
 
-export function Chat({ chatId, projectId, chatType = 'plot', initialMessages = [] }: { chatId: string; projectId: string; chatType?: 'plot'|'character'|'world'; initialMessages?: ChatMessage[] }) {
+export function Chat({ chatId, projectId, chatType = 'plot', initialMessages = [], onLoadingChange }: { chatId: string; projectId: string; chatType?: 'plot'|'character'|'world'; initialMessages?: ChatMessage[]; onLoadingChange?: (loading: boolean) => void }) {
   const supabase = useSupabase();
   const api = useMemo(() => createApi(supabase), [supabase]);
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
@@ -61,6 +61,9 @@ export function Chat({ chatId, projectId, chatType = 'plot', initialMessages = [
           setMessages(arr as ChatMessage[]);
           setHasCache((arr as any[]).length > 0);
         }
+      } else {
+        setHasCache(false);
+        setMessages([]);
       }
     } catch {}
   }, [cacheKey]);
@@ -72,6 +75,12 @@ export function Chat({ chatId, projectId, chatType = 'plot', initialMessages = [
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialMessages]);
+
+  // inform parent about loading changes
+  useEffect(() => {
+    onLoadingChange?.(loadingHistory || streaming);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadingHistory, streaming, onLoadingChange]);
 
   useEffect(() => {
     let mounted = true;
