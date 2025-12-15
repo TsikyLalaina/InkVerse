@@ -8,12 +8,10 @@ export async function loadProjectSettings(projectId: string) {
       id: true,
       title: true,
       description: true,
-      genre: true as any,
+      genres: true as any,
       coreConflict: true as any,
       settingsJson: true as any,
       mode: true as any,
-      // prevent accidental relation selection
-      characters: false as any,
     } as any,
   } as any);
 

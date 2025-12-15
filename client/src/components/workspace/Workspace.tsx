@@ -31,9 +31,24 @@ export function Workspace({ projectId }: { projectId: string }) {
   const [content, setContent] = useState("");
   const [saving, setSaving] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<string>("");
+
+  const placeCaretAtEnd = (el: HTMLElement) => {
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      const sel = window.getSelection();
+      if (!sel) return;
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch {}
+  };
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [aiMuseOpen, setAiMuseOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [creatingChapter, setCreatingChapter] = useState(false);
   const [projectTitle, setProjectTitle] = useState<string>("");
   const [projectDescription, setProjectDescription] = useState<string>("");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -251,7 +266,11 @@ export function Workspace({ projectId }: { projectId: string }) {
         // Open or refresh active tab
         if (!tabs.includes(targetId)) setTabs((prev) => [...prev, targetId!]);
         setActiveId(targetId);
-        if (activeId === targetId) setContent(content);
+        if (activeId === targetId) {
+          setContent(content);
+          contentRef.current = content;
+          try { if (editorRef.current) { editorRef.current.textContent = content; placeCaretAtEnd(editorRef.current); } } catch {}
+        }
       } catch {}
     };
     if (typeof window !== 'undefined') window.addEventListener('workspace:update-chapter', handler as any);
@@ -401,6 +420,8 @@ export function Workspace({ projectId }: { projectId: string }) {
     const ch = chapters.find((c) => c.id === id);
     setTitle(ch?.title || "");
     setContent((ch?.content || "") as string);
+    contentRef.current = (ch?.content || "") as string;
+    try { if (editorRef.current) { editorRef.current.textContent = (ch?.content || "") as string; placeCaretAtEnd(editorRef.current); } } catch {}
   }, [chapters]);
 
   const closeTab = useCallback((id: string) => {
@@ -414,14 +435,19 @@ export function Workspace({ projectId }: { projectId: string }) {
   }, [tabs]);
 
   // Hydrate editor fields when activeId and chapters are restored from cache
+  const chaptersRef = useRef(chapters);
+  useEffect(() => { chaptersRef.current = chapters; }, [chapters]);
+
   useEffect(() => {
     if (!activeId) return;
     if (activeId === SETTINGS_TAB_ID || activeId === CHARACTERS_TAB_ID || activeId === WORLD_TAB_ID) return;
-    const ch = chapters.find((c) => c.id === activeId);
+    const ch = chaptersRef.current.find((c) => c.id === activeId);
     if (!ch) return;
     setTitle(ch.title || "");
     setContent((ch.content || "") as string);
-  }, [activeId, chapters]);
+    contentRef.current = (ch.content || "") as string;
+    try { if (editorRef.current) { editorRef.current.textContent = (ch.content || "") as string; placeCaretAtEnd(editorRef.current); } } catch {}
+  }, [activeId]);
 
   const onDragStart = (e: React.DragEvent<HTMLDivElement>, id: string) => {
     e.dataTransfer.setData("text/tab", id);
@@ -492,21 +518,43 @@ export function Workspace({ projectId }: { projectId: string }) {
   const onTitleChange = (v: string) => {
     if (!activeId) return;
     setTitle(v);
-    scheduleSave(activeId, v, content);
+    const live = editorRef.current?.textContent || content;
+    scheduleSave(activeId, v, live);
   };
   const onContentChange = (v: string) => {
     if (!activeId) return;
-    setContent(v);
+    contentRef.current = v;
     scheduleSave(activeId, title, v);
+    // Ensure any inserted elements retain LTR direction
+    try {
+      const el = editorRef.current;
+      if (el) {
+        el.dir = 'ltr';
+        (el.style as any).direction = 'ltr';
+        (el.style as any).textAlign = 'left';
+        for (let i = 0; i < el.childNodes.length; i++) {
+          const n = el.childNodes[i] as HTMLElement;
+          if (n && n.nodeType === 1) {
+            (n as HTMLElement).setAttribute('dir','ltr');
+            (n as HTMLElement).style.direction = 'ltr';
+            (n as HTMLElement).style.textAlign = 'left';
+          }
+        }
+      }
+    } catch {}
+    // keep caret at end while typing if needed
+    try { if (editorRef.current) placeCaretAtEnd(editorRef.current); } catch {}
   };
 
   const onNewChapter = async () => {
     try {
+      setCreatingChapter(true);
       const res = await api.createChapter(projectId, { title: "Untitled Chapter" });
       const createdAt = (res as any).createdAt as string | undefined;
       setChapters((prev) => sortChapters([...prev, { id: (res as any).id, title: (res as any).title, content: "", createdAt }]));
       openTab((res as any).id);
     } catch {}
+    finally { setCreatingChapter(false); }
   };
 
   const onDeleteChapter = useCallback(async (id: string) => {
@@ -666,9 +714,9 @@ export function Workspace({ projectId }: { projectId: string }) {
             );})}
           </div>
           <div className="p-4 border-t border-border-default">
-            <button className="w-full rounded-lg bg-bg-elevated border border-border-default hover:border-accent hover:bg-bg-hover text-text-secondary hover:text-text-primary text-sm px-4 py-3 flex items-center justify-center gap-2 transition-all duration-150 hover:-translate-y-0.5" onClick={onNewChapter}>
-              <Plus className="w-4 h-4" aria-hidden="true" />
-              <span>New Chapter</span>
+            <button className="w-full rounded-lg bg-bg-elevated border border-border-default hover:border-accent hover:bg-bg-hover text-text-secondary hover:text-text-primary text-sm px-4 py-3 flex items-center justify-center gap-2 transition-all duration-150 hover:-translate-y-0.5 disabled:opacity-50" onClick={onNewChapter} disabled={creatingChapter}>
+              {creatingChapter ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <Plus className="w-4 h-4" aria-hidden="true" />}
+              <span>{creatingChapter ? 'Creating…' : 'New Chapter'}</span>
             </button>
           </div>
         </aside>
@@ -829,26 +877,28 @@ export function Workspace({ projectId }: { projectId: string }) {
           ) : activeId ? (
             <div className="h-full flex flex-col">
               {/* Editor Canvas - Elevated Surface */}
-              <div className="flex-1 min-h-0 overflow-y-auto bg-bg-elevated flex justify-center">
-                <div className="w-full max-w-[800px] px-12 py-16">
+              <div className="flex-1 min-h-0 overflow-y-auto bg-bg-elevated flex justify-center" dir="ltr" style={{ direction: 'ltr' }}>
+                <div className="w-full max-w-[800px] px-12 py-16 text-left" dir="ltr" style={{ direction: 'ltr' }}>
                   {/* Chapter Title Input */}
                   <input
                     value={title}
                     onChange={(e) => onTitleChange(e.target.value)}
                     placeholder="Chapter Title"
-                    className="w-full bg-transparent border-none text-[32px] font-bold text-text-primary placeholder:text-text-tertiary outline-none mb-8 tracking-tight"
+                    dir="ltr"
+                    className="w-full bg-transparent border-none text-[32px] font-bold text-text-primary placeholder:text-text-tertiary outline-none mb-8 tracking-tight text-left"
                   />
                   {/* Chapter Content - Contenteditable */}
                   <div
                     contentEditable
                     suppressContentEditableWarning
                     onInput={(e) => onContentChange(e.currentTarget.textContent || '')}
-                    className="w-full min-h-[400px] text-lg leading-[1.8] text-text-primary outline-none"
-                    style={{ whiteSpace: 'pre-wrap' }}
+                    className="w-full min-h-[400px] text-lg leading-[1.8] text-text-primary outline-none text-left"
+                    dir="ltr"
+                    style={{ whiteSpace: 'pre-wrap', direction: 'ltr', textAlign: 'left', unicodeBidi: 'bidi-override' as any, writingMode: 'horizontal-tb' as any }}
+                    ref={editorRef}
                   >
-                    {content}
                   </div>
-                  {!content && (
+                  {!( (editorRef.current?.textContent ?? content) || '' ).length && (
                     <div className="text-lg text-text-tertiary pointer-events-none -mt-[400px] leading-[1.8]">Start writing your story...</div>
                   )}
                 </div>
@@ -890,7 +940,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         />
         )}
         {rightOpen && !isMobile && (
-        <aside className="bg-bg-primary min-h-0 flex flex-col">
+        <aside className="relative bg-bg-primary min-h-0 flex flex-col">
           <div className="px-5 py-4 text-xs font-semibold tracking-[0.05em] uppercase flex items-center justify-between text-text-secondary">
             <button className="flex items-center gap-2 text-text-secondary hover:text-text-primary" onClick={() => setChatMenuOpen((v)=>!v)}>
               <span className="truncate max-w-[140px] text-text-primary normal-case text-sm font-medium">{(chats.find(c=>c.id===activeChatId)?.title) || 'Select chat'}</span>
@@ -1021,9 +1071,9 @@ export function Workspace({ projectId }: { projectId: string }) {
             );})}
           </div>
           <div className="p-4 border-t border-border-default">
-            <button className="w-full rounded-lg bg-bg-elevated border border-border-default hover:border-accent hover:bg-bg-hover text-text-secondary hover:text-text-primary text-sm px-4 py-3 flex items-center justify-center gap-2 transition-all duration-150 hover:-translate-y-0.5" onClick={onNewChapter}>
-              <Plus className="w-4 h-4" aria-hidden="true" />
-              <span>New Chapter</span>
+            <button className="w-full rounded-lg bg-bg-elevated border border-border-default hover:border-accent hover:bg-bg-hover text-text-secondary hover:text-text-primary text-sm px-4 py-3 flex items-center justify-center gap-2 transition-all duration-150 hover:-translate-y-0.5 disabled:opacity-50" onClick={onNewChapter} disabled={creatingChapter}>
+              {creatingChapter ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <Plus className="w-4 h-4" aria-hidden="true" />}
+              <span>{creatingChapter ? 'Creating…' : 'New Chapter'}</span>
             </button>
           </div>
         </aside>

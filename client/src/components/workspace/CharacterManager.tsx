@@ -499,7 +499,7 @@ export function CharacterManager({ projectId, requireImage }: { projectId: strin
           <div className="text-xs px-2 py-1 rounded-md border border-border-default text-text-secondary">{count} Characters</div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={onNew} className="rounded-lg bg-bg-elevated border border-border-default hover:border-accent hover:bg-bg-hover text-text-secondary hover:text-text-primary text-sm px-3 py-2 inline-flex items-center justify-center gap-2 transition-all duration-150 hover:-translate-y-0.5">
+          <button onClick={onNew} className="rounded-lg bg-bg-elevated border border-border-default hover:border-accent hover:bg-bg-hover text-text-secondary hover:text-text-primary text-xs md:text-sm px-2 py-1.5 md:px-4 md:py-3 inline-flex items-center justify-center gap-2 transition-all duration-150 hover:-translate-y-0.5 -translate-x-1 md:translate-x-0">
             <Plus className="w-4 h-4" />
             New Character
           </button>
