@@ -82,6 +82,17 @@ export function Workspace({ projectId }: { projectId: string }) {
   const [hasChaptersCache, setHasChaptersCache] = useState<boolean>(false);
   const [leftWidth, setLeftWidth] = useState<number>(260);
   const [rightWidth, setRightWidth] = useState<number>(260);
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Detect mobile screen size
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   // Hydrate chats from localStorage after mount (prevents SSR/client mismatch)
   useEffect(() => {
@@ -518,43 +529,51 @@ export function Workspace({ projectId }: { projectId: string }) {
   const activeChapter = chapters.find((c) => c.id === activeId) || null;
 
   const gridCols = useMemo(() => {
+    // On mobile, sidebars are overlays, so grid is just the main content
+    if (isMobile) return '1fr';
+    
     const cols: string[] = [];
     if (!leftCollapsed) { cols.push(`${leftWidth}px`); cols.push('4px'); }
     cols.push('1fr');
     if (rightOpen) { cols.push('4px'); cols.push(`${rightWidth}px`); }
     return cols.join(' ');
-  }, [leftCollapsed, rightOpen, leftWidth, rightWidth]);
+  }, [leftCollapsed, rightOpen, leftWidth, rightWidth, isMobile]);
 
   return (
     <div className="h-screen w-screen bg-bg-primary text-text-primary grid grid-rows-[auto_1fr] relative">
       {/* Top Tabs Bar */}
       <div className="h-12 border-b border-border-default bg-bg-primary flex items-center relative">
-        <div className="flex-1 min-w-0 flex items-stretch gap-1 px-2 overflow-x-auto">
-          {tabs.map((id) => {
-            const ch = chapters.find((c) => c.id === id);
-            const active = id === activeId;
-            const label = id === SETTINGS_TAB_ID ? 'Settings' : (id === CHARACTERS_TAB_ID ? 'Characters' : (ch?.title || 'Untitled'));
-            return (
-              <div
-                key={id}
-                draggable
-                onDragStart={(e) => onDragStart(e, id)}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => onDrop(e, id)}
-                onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); closeTab(id); } }}
-                className={`group flex items-center gap-2 px-4 h-10 rounded-t-md transition-all duration-150 ${active ? 'bg-bg-elevated text-text-primary' : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover'}`}
-                onClick={() => setActiveId(id)}
-              >
-                <span className="text-sm truncate max-w-[160px]">{label}</span>
-                <button className="opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity duration-150" onClick={(e) => { e.stopPropagation(); closeTab(id); }}>×</button>
-              </div>
-            );
-          })}
-        </div>
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+        {/* Tabs - hidden on mobile */}
+        {!isMobile && (
+          <div className="flex-1 min-w-0 flex items-stretch gap-1 px-2 overflow-x-auto">
+            {tabs.map((id) => {
+              const ch = chapters.find((c) => c.id === id);
+              const active = id === activeId;
+              const label = id === SETTINGS_TAB_ID ? 'Settings' : (id === CHARACTERS_TAB_ID ? 'Characters' : (ch?.title || 'Untitled'));
+              return (
+                <div
+                  key={id}
+                  draggable
+                  onDragStart={(e) => onDragStart(e, id)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => onDrop(e, id)}
+                  onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); closeTab(id); } }}
+                  className={`group flex items-center gap-2 px-4 h-10 rounded-t-md transition-all duration-150 ${active ? 'bg-bg-elevated text-text-primary' : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover'}`}
+                  onClick={() => setActiveId(id)}
+                >
+                  <span className="text-sm truncate max-w-[160px]">{label}</span>
+                  <button className="opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity duration-150" onClick={(e) => { e.stopPropagation(); closeTab(id); }}>×</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {/* Project Title - centered on desktop, left-aligned on mobile */}
+        <div className={`${isMobile ? 'flex-1 px-4' : 'absolute inset-0 flex items-center justify-center pointer-events-none'}`}>
           <div className="text-sm font-semibold text-text-primary truncate max-w-[60%] tracking-elegant">{projectTitle || 'Project'}</div>
         </div>
-        <div className="absolute right-2 top-1 z-10 flex items-center gap-2">
+        {/* Settings button - always visible */}
+        <div className={`${isMobile ? 'flex items-center gap-2' : 'absolute right-2 top-1 z-10 flex items-center gap-2'}`}>
           <button
             className="text-xs px-3 py-1.5 rounded-md border border-border-default bg-bg-elevated text-text-secondary hover:text-accent hover:border-accent transition-all duration-150"
             onClick={() => setSettingsMenuOpen((v) => !v)}
@@ -599,17 +618,18 @@ export function Workspace({ projectId }: { projectId: string }) {
 
       {leftCollapsed && (
         <button
-          className="absolute left-2 top-14 z-10 text-xs px-3 py-2 rounded-md border border-border-default bg-bg-elevated text-text-secondary hover:text-accent hover:border-accent transition-all duration-150 flex items-center gap-1 shadow-elevation"
+          className="absolute left-2 top-14 z-10 px-2 py-2 rounded-md border border-border-default bg-bg-elevated text-text-secondary hover:text-accent hover:border-accent transition-all duration-150 flex items-center justify-center shadow-elevation"
           onClick={() => setLeftCollapsed(false)}
+          title="Open Chapters"
         >
           <ChevronRight className="w-4 h-4" aria-hidden="true" />
-          <span>Chapters</span>
+          <span className="sr-only">Open Chapters</span>
         </button>
       )}
 
       {/* Layout: Left sidebar + Main editor + Right sidebar */}
       <div className="grid min-h-0" style={{ gridTemplateColumns: gridCols }}>
-        {!leftCollapsed && (
+        {!leftCollapsed && !isMobile && (
         <aside className="bg-bg-primary min-h-0 flex flex-col">
           <div className="px-5 py-4 text-xs font-semibold tracking-[0.05em] uppercase flex items-center justify-between text-text-secondary">
             <span>CHAPTERS</span>
@@ -634,7 +654,7 @@ export function Workspace({ projectId }: { projectId: string }) {
                   <div className="text-xs text-text-tertiary">{wordCount} words</div>
                 </button>
                 <button
-                  className={`opacity-0 group-hover:opacity-100 transition-opacity duration-150 ${deletingId === c.id ? 'text-red-400 opacity-60 cursor-not-allowed' : 'text-text-tertiary hover:text-red-400'}`}
+                  className={`${isMobile ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity duration-150 ${deletingId === c.id ? 'text-red-400 opacity-60 cursor-not-allowed' : 'text-text-tertiary hover:text-red-400'}`}
                   onClick={(e) => { e.stopPropagation(); if (deletingId) return; void onDeleteChapter(c.id); }}
                   title="Delete chapter"
                   disabled={deletingId === c.id}
@@ -653,7 +673,7 @@ export function Workspace({ projectId }: { projectId: string }) {
           </div>
         </aside>
         )}
-        {!leftCollapsed && (
+        {!leftCollapsed && !isMobile && (
           <div
             role="separator"
             aria-orientation="vertical"
@@ -834,18 +854,18 @@ export function Workspace({ projectId }: { projectId: string }) {
                 </div>
               </div>
               {/* Status Bar */}
-              <div className="h-12 bg-bg-primary border-t border-border-default px-6 flex items-center justify-between text-[13px] text-text-tertiary">
-                <div className="flex items-center gap-6">
-                  <div className="flex items-center gap-2">
+              <div className="h-12 bg-bg-primary border-t border-border-default px-4 flex items-center justify-between text-[12px] text-text-tertiary gap-4 overflow-hidden">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
                     <div className={`w-1.5 h-1.5 rounded-full ${saving ? 'bg-warning animate-pulse' : 'bg-success'}`} />
-                    <span>{saving ? 'Saving…' : 'Saved'}</span>
+                    <span className="whitespace-nowrap">{saving ? 'Saving…' : 'Saved'}</span>
                   </div>
-                  <div>{content.trim().split(/\s+/).filter(Boolean).length} words</div>
-                  <div>{content.length} characters</div>
-                  <div>{Math.ceil(content.trim().split(/\s+/).filter(Boolean).length / 200)} min read</div>
+                  <div className="hidden sm:block whitespace-nowrap">{content.trim().split(/\s+/).filter(Boolean).length} words</div>
+                  <div className="hidden md:block whitespace-nowrap">{content.length} chars</div>
+                  <div className="hidden lg:block whitespace-nowrap">{Math.ceil(content.trim().split(/\s+/).filter(Boolean).length / 200)} min</div>
                 </div>
-                <div>
-                  {activeChapter?.createdAt && `Last edited ${new Date(activeChapter.createdAt).toLocaleString()}`}
+                <div className="hidden sm:block text-right truncate flex-shrink-0">
+                  {activeChapter?.createdAt && `${new Date(activeChapter.createdAt).toLocaleDateString()} ${new Date(activeChapter.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
                 </div>
               </div>
             </div>
@@ -860,7 +880,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         </main>
 
         {/* Right: Chats Sidebar */}
-        {rightOpen && (
+        {rightOpen && !isMobile && (
         <div
           role="separator"
           aria-orientation="vertical"
@@ -869,8 +889,8 @@ export function Workspace({ projectId }: { projectId: string }) {
           style={{ userSelect: 'none' }}
         />
         )}
-        {rightOpen && (
-        <aside className="bg-bg-primary min-h-0 flex flex-col relative">
+        {rightOpen && !isMobile && (
+        <aside className="bg-bg-primary min-h-0 flex flex-col">
           <div className="px-5 py-4 text-xs font-semibold tracking-[0.05em] uppercase flex items-center justify-between text-text-secondary">
             <button className="flex items-center gap-2 text-text-secondary hover:text-text-primary" onClick={() => setChatMenuOpen((v)=>!v)}>
               <span className="truncate max-w-[140px] text-text-primary normal-case text-sm font-medium">{(chats.find(c=>c.id===activeChatId)?.title) || 'Select chat'}</span>
@@ -934,7 +954,7 @@ export function Workspace({ projectId }: { projectId: string }) {
                         <div className={`text-sm font-medium ${activeChatId===c.id ? 'text-text-primary' : 'text-text-secondary'}`}>{c.title}</div>
                       </button>
                       <button
-                        className={`opacity-0 group-hover:opacity-100 transition-opacity duration-150 text-text-tertiary hover:text-red-400`}
+                        className={`${isMobile ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity duration-150 text-text-tertiary hover:text-red-400`}
                         onClick={async (e) => { e.stopPropagation(); if (!confirm('Delete this chat?')) return; try { await api.deleteChat(projectId, c.id); setChats((prev)=>prev.filter(x=>x.id!==c.id)); if (activeChatId===c.id) setActiveChatId(chats.find(x=>x.id!==c.id)?.id || null); } catch {} }}
                         title="Delete chat"
                       >
@@ -948,7 +968,7 @@ export function Workspace({ projectId }: { projectId: string }) {
             </div>
           )}
           {/* Chat view fills the sidebar */}
-          <div className="min-h-0 flex-1 overflow-hidden border-t border-border-default">
+          <div className="flex-1 overflow-hidden border-t border-border-default flex flex-col">
             {activeChatId ? (
               <Chat
                 chatId={activeChatId}
@@ -956,15 +976,158 @@ export function Workspace({ projectId }: { projectId: string }) {
                 chatType={(chats.find(c => c.id === activeChatId)?.type) || 'plot'}
               />
             ) : (
-              <div className="h-full grid place-items-center text-xs text-text-tertiary">Open the chat menu to create or select a chat.</div>
+              <div className="flex-1 grid place-items-center text-xs text-text-tertiary">Open the chat menu to create or select a chat.</div>
             )}
           </div>
         </aside>
         )}
       </div>
 
+      {/* Mobile Left Sidebar Overlay */}
+      {isMobile && !leftCollapsed && (
+        <aside className="fixed left-0 top-0 bottom-0 z-40 w-64 shadow-elevation bg-bg-primary min-h-0 flex flex-col">
+          <div className="px-5 py-4 text-xs font-semibold tracking-[0.05em] uppercase flex items-center justify-between text-text-secondary">
+            <span>CHAPTERS</span>
+            <button className="text-text-tertiary hover:text-accent rounded p-1 hover:bg-bg-hover transition-all duration-150" onClick={() => setLeftCollapsed(true)}>
+              <ChevronLeft className="w-4 h-4" aria-hidden="true" />
+              <span className="sr-only">Collapse</span>
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-4">
+            {loadingCh && <div className="text-xs text-text-secondary px-2 py-2">Loading…</div>}
+            {errorCh && <div className="text-xs text-red-400 px-2 py-2 bg-red-950/20 rounded-md border border-red-500/20">{errorCh}</div>}
+            {chapters.map((c, idx) => {
+              const wordCount = c.content ? c.content.trim().split(/\s+/).filter(Boolean).length : 0;
+              return (
+              <div key={c.id} className={`group w-full flex items-start justify-between gap-2 px-3 py-3 rounded-lg mb-2 transition-all duration-150 ${activeId === c.id ? 'bg-bg-elevated border-l-3 border-accent' : 'hover:bg-bg-hover'}`}>
+                <button
+                  className="flex-1 text-left"
+                  onClick={() => openTab(c.id)}
+                >
+                  <div className="text-xs uppercase text-text-tertiary mb-1">Chapter {idx + 1}</div>
+                  <div className={`text-sm font-medium mb-1 ${activeId === c.id ? 'text-text-primary' : 'text-text-secondary'}`}>{c.title || 'Untitled'}</div>
+                  <div className="text-xs text-text-tertiary">{wordCount} words</div>
+                </button>
+                <button
+                  className={`${isMobile ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity duration-150 ${deletingId === c.id ? 'text-red-400 opacity-60 cursor-not-allowed' : 'text-text-tertiary hover:text-red-400'}`}
+                  onClick={(e) => { e.stopPropagation(); if (deletingId) return; void onDeleteChapter(c.id); }}
+                  title="Delete chapter"
+                  disabled={deletingId === c.id}
+                >
+                  {deletingId === c.id ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <Trash2 className="w-4 h-4" aria-hidden="true" />}
+                  <span className="sr-only">Delete</span>
+                </button>
+              </div>
+            );})}
+          </div>
+          <div className="p-4 border-t border-border-default">
+            <button className="w-full rounded-lg bg-bg-elevated border border-border-default hover:border-accent hover:bg-bg-hover text-text-secondary hover:text-text-primary text-sm px-4 py-3 flex items-center justify-center gap-2 transition-all duration-150 hover:-translate-y-0.5" onClick={onNewChapter}>
+              <Plus className="w-4 h-4" aria-hidden="true" />
+              <span>New Chapter</span>
+            </button>
+          </div>
+        </aside>
+      )}
+
+      {/* Mobile Right Sidebar Overlay */}
+      {isMobile && rightOpen && (
+        <aside className="fixed right-0 top-0 bottom-0 z-40 w-64 shadow-elevation bg-bg-primary flex flex-col">
+          <div className="px-5 py-4 text-xs font-semibold tracking-[0.05em] uppercase flex items-center justify-between text-text-secondary">
+            <button className="flex items-center gap-2 text-text-secondary hover:text-text-primary" onClick={() => setChatMenuOpen((v)=>!v)}>
+              <span className="truncate max-w-[140px] text-text-primary normal-case text-sm font-medium">{(chats.find(c=>c.id===activeChatId)?.title) || 'Select chat'}</span>
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${chatMenuOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+            </button>
+            <div className="flex items-center gap-2">
+              <button className="text-text-tertiary hover:text-accent rounded p-1 hover:bg-bg-hover transition-all duration-150" onClick={() => { setNewChatOpen(true); setChatMenuOpen(true); }} title="New Chat">
+                <Plus className="w-4 h-4" aria-hidden="true" />
+              </button>
+              <button className="text-text-tertiary hover:text-accent rounded p-1 hover:bg-bg-hover transition-all duration-150" onClick={() => setRightOpen(false)}>
+                <ChevronRight className="w-4 h-4" aria-hidden="true" />
+                <span className="sr-only">Collapse</span>
+              </button>
+            </div>
+          </div>
+          {chatMenuOpen && (
+            <div className="absolute left-3 right-3 top-14 z-20 rounded-lg border border-border-default bg-bg-elevated shadow-elevation">
+              <div className="p-3 border-b border-border-default flex items-center justify-between">
+                <div className="text-sm font-semibold text-text-primary">Chats</div>
+                <button className="text-text-tertiary hover:text-text-primary" onClick={()=> setChatMenuOpen(false)}>✕</button>
+              </div>
+              <div className="p-3 space-y-3">
+                {newChatOpen && (
+                  <div className="border border-border-default rounded-lg p-3 bg-bg-primary">
+                    <div className="text-xs text-text-tertiary mb-2">Create a new chat</div>
+                    <div className="flex items-center gap-2 mb-2">
+                      {(['plot','character','world'] as const).map((t)=> (
+                        <label key={t} className={`text-xs px-3 py-1.5 rounded-md border cursor-pointer ${newChatType===t ? 'border-accent text-accent' : 'border-border-default text-text-secondary hover:text-text-primary'}`}>
+                          <input type="radio" name="chat-type" className="hidden" checked={newChatType===t} onChange={()=>setNewChatType(t)} />{t}
+                        </label>
+                      ))}
+                    </div>
+                    <input value={newChatTitle} onChange={(e)=>setNewChatTitle(e.target.value)} placeholder="Title (optional)" className="w-full bg-bg-elevated border border-border-default rounded-md px-3 py-2 text-text-primary outline-none focus:border-accent text-sm" />
+                    {createChatError && <div className="mt-2 text-xs text-red-400">{createChatError}</div>}
+                    <div className="mt-3 flex items-center justify-end gap-2">
+                      <button className="px-3 py-1.5 rounded-md border border-border-default text-text-secondary hover:bg-bg-hover" onClick={()=>{ setNewChatOpen(false); setNewChatTitle(''); setCreateChatError(null); }}>Cancel</button>
+                      <button className="px-3 py-1.5 rounded-md bg-accent hover:bg-accent-hover text-white disabled:opacity-50" disabled={creatingChat} onClick={async ()=>{
+                        setCreatingChat(true); setCreateChatError(null);
+                        try {
+                          const c = await api.createChat(projectId, { type: newChatType, title: newChatTitle || undefined });
+                          setChats((prev)=>[...prev, c]);
+                          setActiveChatId(c.id);
+                          setNewChatOpen(false);
+                          setNewChatTitle('');
+                          setChatMenuOpen(false);
+                        } catch (e: any) {
+                          setCreateChatError(e?.message || 'Failed to create chat');
+                        } finally { setCreatingChat(false); }
+                      }}>{creatingChat ? 'Creating…' : 'Create'}</button>
+                    </div>
+                  </div>
+                )}
+                <div className="max-h-64 overflow-y-auto pr-1">
+                  {!chats.length && !newChatOpen && (
+                    <div className="text-xs text-text-tertiary px-2 py-2">No chats yet. <button className="underline" onClick={()=>{ setNewChatType('plot'); setNewChatOpen(true); }}>Create your first chat</button>.</div>
+                  )}
+                  {chats.map((c) => (
+                    <div key={c.id} className={`group w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md mb-1 transition-all duration-150 ${activeChatId===c.id ? 'bg-bg-hover' : 'hover:bg-bg-hover'}`}>
+                      <button className="flex-1 text-left" onClick={() => { setActiveChatId(c.id); setChatMenuOpen(false); }}>
+                        <div className="text-[10px] uppercase text-text-tertiary mb-0.5">{c.type}</div>
+                        <div className={`text-sm font-medium ${activeChatId===c.id ? 'text-text-primary' : 'text-text-secondary'}`}>{c.title}</div>
+                      </button>
+                      <button
+                        className={`${isMobile ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity duration-150 text-text-tertiary hover:text-red-400`}
+                        onClick={async (e) => { e.stopPropagation(); if (!confirm('Delete this chat?')) return; try { await api.deleteChat(projectId, c.id); setChats((prev)=>prev.filter(x=>x.id!==c.id)); if (activeChatId===c.id) setActiveChatId(chats.find(x=>x.id!==c.id)?.id || null); } catch {} }}
+                        title="Delete chat"
+                      >
+                        <Trash2 className="w-4 h-4" aria-hidden="true" />
+                        <span className="sr-only">Delete</span>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+          {/* Chat view fills the sidebar */}
+          <div className="flex-1 overflow-hidden border-t border-border-default flex flex-col">
+            {activeChatId ? (
+              <Chat
+                chatId={activeChatId}
+                projectId={projectId}
+                chatType={(chats.find(c => c.id === activeChatId)?.type) || 'plot'}
+              />
+            ) : (
+              <div className="flex-1 grid place-items-center text-xs text-text-tertiary">Open the chat menu to create or select a chat.</div>
+            )}
+          </div>
+        </aside>
+      )}
+
       {!rightOpen && (
-        <button className="absolute right-2 top-14 z-10 text-xs px-3 py-2 rounded-md border border-border-default bg-bg-elevated text-text-secondary hover:text-accent hover:border-accent transition-all duration-150 flex items-center gap-1 shadow-elevation" onClick={() => setRightOpen(true)}>Open Chats</button>
+        <button className="absolute right-2 top-14 z-10 px-2 py-2 rounded-md border border-border-default bg-bg-elevated text-text-secondary hover:text-accent hover:border-accent transition-all duration-150 flex items-center justify-center shadow-elevation" onClick={() => setRightOpen(true)} title="Open Chats">
+          <ChevronLeft className="w-4 h-4" aria-hidden="true" />
+          <span className="sr-only">Open Chats</span>
+        </button>
       )}
 
       {/* No modal: dropdown is anchored to header inside the sidebar */}

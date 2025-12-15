@@ -1234,7 +1234,7 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
           </div>
         </div>
         <div className="flex items-center gap-1 md:gap-2 flex-shrink-0">
-          <button onClick={toggleFs} className="rounded-md border border-border-default px-2 md:px-3 py-1 md:py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro hidden sm:block">{fs ? 'Exit' : 'Full'}</button>
+          <button onClick={toggleFs} className="rounded-md border border-border-default px-2 md:px-3 py-1 md:py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro">{fs ? 'Exit' : 'Full'}</button>
           <button className="rounded-md border border-border-default px-2 md:px-3 py-1 md:py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro hidden md:block" disabled>Settings</button>
           <button onClick={onClose} className="rounded-md bg-accent px-2 md:px-3 py-1 md:py-1.5 text-xs font-semibold text-black hover:bg-accent-hover transition-micro">Exit</button>
         </div>

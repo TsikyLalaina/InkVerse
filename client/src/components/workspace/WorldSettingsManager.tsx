@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSupabase } from "@/components/providers/SupabaseProvider";
 import { createApi } from "@/lib/api";
-import { Loader2, Plus, Search, Trash2, Upload, X } from "lucide-react";
+import { Loader2, Plus, Search, Trash2, Upload, X, ChevronLeft, ChevronDown } from "lucide-react";
 
 function classNames(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(" ");
@@ -54,6 +54,29 @@ export function WorldSettingsManager({ projectId }: { projectId: string }) {
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<'idle'|'uploading'|'uploaded'|'error'>('idle');
   const dropRef = useRef<HTMLDivElement | null>(null);
+  const [traitsOpen, setTraitsOpen] = useState(true);
+
+  const [isMobile, setIsMobile] = useState(false);
+  const [isTablet, setIsTablet] = useState(false);
+  const [mobileView, setMobileView] = useState<'list'|'detail'>('list');
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const [listScrollTop, setListScrollTop] = useState(0);
+  useEffect(() => {
+    const check = () => {
+      const w = window.innerWidth;
+      setIsMobile(w < 768);
+      setIsTablet(w >= 768 && w < 1024);
+    };
+    check();
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, []);
+  useEffect(() => {
+    if (!isMobile) return;
+    if (mobileView === 'list' && listRef.current) {
+      try { listRef.current.scrollTop = listScrollTop; } catch {}
+    }
+  }, [mobileView, isMobile, listScrollTop]);
 
   const cacheKey = useMemo(() => `inkverse_project_${projectId}_world`, [projectId]);
   const activeKey = useMemo(() => `inkverse_project_${projectId}_world_active`, [projectId]);
@@ -266,6 +289,7 @@ export function WorldSettingsManager({ projectId }: { projectId: string }) {
     setActiveId("__new__");
     setForm({ name: "", images: [] });
     setTraits({});
+    if (isMobile) setMobileView('detail');
   };
 
   // Traits helpers
@@ -307,12 +331,19 @@ export function WorldSettingsManager({ projectId }: { projectId: string }) {
     if (depth >= 5) return;
     setTraits((curr: any) => {
       const nxt = clone(curr);
+      let parent: any = null;
       let ref: any = nxt;
-      for (let i = 0; i < pathToObj.length; i++) ref = ref[pathToObj[i]];
+      for (let i = 0; i < pathToObj.length; i++) { parent = ref; ref = ref[pathToObj[i]]; }
       if (!ref || typeof ref !== 'object' || Array.isArray(ref)) return nxt;
       let base = 'key'; let i2 = 1; let key = base;
       while (Object.prototype.hasOwnProperty.call(ref, key)) { key = `${base}-${i2++}`; }
-      ref[key] = "";
+      const newObj = { [key]: "", ...ref } as any;
+      if (parent && pathToObj.length) {
+        const lastKey = pathToObj[pathToObj.length - 1];
+        parent[lastKey] = newObj;
+      } else {
+        return newObj;
+      }
       return nxt;
     });
   };
@@ -321,8 +352,8 @@ export function WorldSettingsManager({ projectId }: { projectId: string }) {
       const nxt = clone(curr);
       let base = 'key'; let i = 1; let k = base;
       while (Object.prototype.hasOwnProperty.call(nxt, k)) { k = `${base}-${i++}`; }
-      (nxt as any)[k] = "";
-      return nxt;
+      const newRoot = { [k]: "", ...nxt } as any;
+      return newRoot;
     });
   };
   const convertType = (path: Array<string|number>, parentPath: Array<string|number>, key: string, nextType: 'string'|'object'|'array', depth: number) => {
@@ -411,22 +442,22 @@ export function WorldSettingsManager({ projectId }: { projectId: string }) {
         </div>
       </div>
 
-      <div className="min-h-0 grid" style={{ gridTemplateColumns: "35% 65%" }}>
-        <aside className="border-r border-border-default min-h-0 flex flex-col">
+      <div className="min-h-0 grid" style={{ gridTemplateColumns: isMobile ? "1fr" : (isTablet ? "40% 60%" : "35% 65%") }}>
+        <aside className={classNames(isMobile && mobileView==='detail' && 'hidden', "border-b md:border-r border-border-default min-h-0 flex flex-col") }>
           <div className="p-3">
             <div className="relative">
-              <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Search world settings" className="w-full bg-bg-primary border border-border-default rounded-md pl-9 pr-3 py-2.5 text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent" />
+              <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Search world settings" className="w-full bg-bg-primary border border-border-default rounded-md pl-9 pr-3 py-3 md:py-2.5 text-base md:text-sm min-h-[44px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent" />
               <Search className="w-4 h-4 absolute left-3 top-3 text-text-tertiary" />
             </div>
           </div>
-          <div className="flex-1 overflow-y-auto px-3 pb-3">
+          <div ref={listRef} className="flex-1 overflow-y-auto px-3 pb-3">
             {loading && <div className="text-xs text-text-secondary px-2 py-2">Loading…</div>}
             {error && <div className="text-xs text-red-400 px-2 py-2 bg-red-950/20 rounded-md border border-red-500/20">{error}</div>}
             {!loading && !filtered.length && (
               <div className="mt-10 text-center text-text-tertiary text-sm">No world settings yet. Create your first entry!</div>
             )}
             {filtered.map((w) => (
-              <button key={w.id} onClick={() => setActiveId(w.id!)} className={classNames("w-full text-left px-3 py-3 rounded-md mb-2 transition-all", activeId===w.id ? "border-l-2 border-blue-500 bg-bg-elevated" : "hover:bg-bg-hover") }>
+              <button key={w.id} onClick={() => { if (isMobile) { setListScrollTop(listRef.current?.scrollTop || 0); setMobileView('detail'); } setActiveId(w.id!); }} className={classNames("w-full text-left px-3 py-3 min-h-[44px] rounded-md mb-2 transition-all", activeId===w.id ? "border-l-2 border-blue-500 bg-bg-elevated" : "hover:bg-bg-hover") }>
                 <div className="flex items-center gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-text-primary truncate">{w.name}</div>
@@ -438,14 +469,20 @@ export function WorldSettingsManager({ projectId }: { projectId: string }) {
           </div>
         </aside>
 
-        <section className="min-h-0 overflow-y-auto p-6" aria-label="World details">
+        <section className={classNames(isMobile && mobileView==='list' && 'hidden', "min-h-0 overflow-y-auto p-6")} aria-label="World details">
           {activeId ? (
             <div className="max-w-2xl mx-auto">
+              <div className="md:hidden mb-3">
+                <button onClick={() => { if (isMobile) { setMobileView('list'); } }} className="inline-flex items-center gap-2 rounded-md border border-border-default px-3 py-2 min-h-[44px]">
+                  <ChevronLeft className="w-4 h-4" />
+                  Back
+                </button>
+              </div>
               <div className="grid gap-4">
                 <div ref={dropRef} className="flex flex-col items-start mb-2 p-3 rounded-xl border border-border-default bg-bg-elevated w-full">
                   <div className="text-xs text-text-tertiary mb-2">World Images</div>
                   <div className="flex items-center gap-2 mb-2">
-                    <label className="px-3 py-2 rounded-md border border-border-default bg-bg-primary text-text-secondary hover:text-text-primary inline-flex items-center gap-2 cursor-pointer">
+                    <label className="w-full md:w-auto min-h-[44px] px-3 py-3 md:py-2 rounded-md border border-border-default bg-bg-primary text-text-secondary hover:text-text-primary text-base md:text-sm inline-flex items-center justify-center gap-2 cursor-pointer">
                       <Upload className="w-4 h-4" />
                       Upload Image
                       <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => { const files = Array.from(e.target.files || []); if (files.length) { (async () => { await onUploadFiles(files as File[]); })(); } }} />
@@ -454,12 +491,12 @@ export function WorldSettingsManager({ projectId }: { projectId: string }) {
                     {uploadStatus === 'uploaded' && !uploading && <div className="text-xs text-green-400">Uploaded</div>}
                     {uploadStatus === 'error' && !uploading && <div className="text-xs text-red-400">Upload failed</div>}
                   </div>
-                  <div className="flex gap-2 overflow-x-auto w-full pb-1">
+                  <div className="grid grid-cols-2 gap-2 md:flex md:overflow-x-auto w-full pb-1">
                     {(form.images || []).map((url, idx) => (
-                      <div key={idx} className="relative border border-border-default rounded-md overflow-hidden bg-bg-primary flex-none w-24 h-24">
+                      <div key={idx} className="relative border border-border-default rounded-md overflow-hidden bg-bg-primary flex-none w-20 h-20 md:w-24 md:h-24">
                         <img src={url} alt="world" className="w-full h-full object-cover" />
                         <button
-                          className="absolute top-1 right-1 bg-black/60 text-white rounded p-1"
+                          className="absolute top-1 right-1 bg-black/60 text-white rounded-md p-2 min-w-[32px] min-h-[32px] flex items-center justify-center"
                           title="Remove"
                           onClick={async () => {
                             const removedUrl = (form.images || [])[idx];
@@ -491,35 +528,40 @@ export function WorldSettingsManager({ projectId }: { projectId: string }) {
                 </div>
                 <label className="grid gap-2 text-sm">
                   <span className="text-xs text-text-tertiary uppercase tracking-wide">Name</span>
-                  <input value={form.name} onChange={(e)=>setForm((f)=>({ ...f, name: e.target.value }))} className="w-full bg-bg-primary border border-border-default rounded-md px-4 py-2.5 text-text-primary outline-none focus:border-accent" />
+                  <input value={form.name} onChange={(e)=>setForm((f)=>({ ...f, name: e.target.value }))} className="w-full bg-bg-primary border border-border-default rounded-md px-4 py-3 md:py-2.5 text-base md:text-sm min-h-[48px] text-text-primary outline-none focus:border-accent" />
                 </label>
                 <label className="grid gap-2 text-sm">
                   <span className="text-xs text-text-tertiary uppercase tracking-wide">Summary</span>
-                  <textarea value={form.summary || ""} onChange={(e)=>setForm((f)=>({ ...f, summary: e.target.value }))} rows={5} className="w-full bg-bg-primary border border-border-default rounded-md px-4 py-2.5 text-text-primary outline-none focus:border-accent text-sm" />
+                  <textarea value={form.summary || ""} onChange={(e)=>setForm((f)=>({ ...f, summary: e.target.value }))} rows={5} className="w-full bg-bg-primary border border-border-default rounded-md px-4 py-3 md:py-2.5 text-text-primary outline-none focus:border-accent text-base md:text-sm" />
                   <span className="text-[11px] text-text-tertiary">{(form.summary || "").length} characters</span>
                 </label>
 
                 <div className="grid gap-2 text-sm">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs text-text-tertiary uppercase tracking-wide">Traits</span>
-                    <button onClick={addRootKey} className="px-2 py-1 rounded-md border border-border-default text-text-secondary hover:text-text-primary text-xs inline-flex items-center gap-1"><Plus className="w-3 h-3" /> Add key</button>
+                    <button type="button" onClick={()=>setTraitsOpen(v=>!v)} aria-expanded={traitsOpen} className="inline-flex items-center gap-1 text-xs text-text-tertiary uppercase tracking-wide">
+                      <ChevronDown className={traitsOpen ? "w-3 h-3 transition-transform" : "w-3 h-3 -rotate-90 transition-transform"} />
+                      <span>Traits</span>
+                    </button>
+                    <button onClick={addRootKey} className="px-3 py-2 rounded-md border border-border-default text-text-secondary hover:text-text-primary text-sm inline-flex items-center gap-1"><Plus className="w-3 h-3" /> Add key</button>
                   </div>
-                  <div className="mt-1">
-                    {Object.keys(traits || {}).length === 0 && (
-                      <div className="text-xs text-text-tertiary">No traits yet. Add a key.</div>
-                    )}
-                    <TraitObject obj={traits} path={[]} depth={1} />
-                  </div>
+                  {traitsOpen && (
+                    <div className="mt-1">
+                      {Object.keys(traits || {}).length === 0 && (
+                        <div className="text-xs text-text-tertiary">No traits yet. Add a key.</div>
+                      )}
+                      <TraitObject obj={traits} path={[]} depth={1} />
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center justify-between pt-4">
-                  <button onClick={onDelete} disabled={!activeId || activeId==="__new__" || deleting} className="text-red-400 hover:text-red-300 inline-flex items-center gap-2 text-sm">
+                  <button onClick={onDelete} disabled={!activeId || activeId==="__new__" || deleting} className="text-red-400 hover:text-red-300 inline-flex items-center gap-2 text-base md:text-sm min-h-[44px] px-2 py-2">
                     <Trash2 className="w-4 h-4" />
                     Delete Entry
                   </button>
                   <div className="flex items-center gap-2">
-                    <button onClick={() => { setActiveId(null); }} className="px-4 py-2 rounded-md border border-border-default text-text-secondary hover:bg-bg-hover">Cancel</button>
-                    <button onClick={onSave} disabled={saving} className="px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-white">
+                    <button onClick={() => { setActiveId(null); if (isMobile) setMobileView('list'); }} className="px-4 py-3 md:py-2 rounded-md border border-border-default text-text-secondary hover:bg-bg-hover min-h-[44px] text-base md:text-sm">Cancel</button>
+                    <button onClick={onSave} disabled={saving} className="px-4 py-3 md:py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-white min-h-[44px] text-base md:text-sm">
                       {saving ? <span className="inline-flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Saving…</span> : "Save Entry"}
                     </button>
                   </div>
@@ -585,41 +627,41 @@ function TraitRow({ k, v, parentPath, depth, ctx }: { k: string; v: any; parentP
 
   return (
     <div className="border border-border-default rounded-md p-2 bg-bg-elevated">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
         <input
           value={name}
           onChange={(e)=>setName(e.target.value)}
           onBlur={()=>{ if (name !== k && name.trim()) ctx.renameKey(parentPath, k, name.trim()); }}
           onKeyDown={(e)=>{ if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); } }}
           placeholder="key"
-          className="flex-none w-48 bg-bg-primary border border-border-default rounded-md px-2 py-1.5 text-text-primary text-sm outline-none focus:border-accent"
+          className="w-full sm:w-48 bg-bg-primary border border-border-default rounded-md px-3 py-2 min-h-[44px] text-text-primary text-base sm:text-sm outline-none focus:border-accent"
         />
-        <select value={type} onChange={(e)=>ctx.convertType([...parentPath, k], parentPath, k, e.target.value as any, depth)} className="flex-none w-28 bg-bg-primary border border-border-default rounded-md px-2 py-1.5 text-text-primary text-sm outline-none focus:border-accent">
+        <select value={type} onChange={(e)=>ctx.convertType([...parentPath, k], parentPath, k, e.target.value as any, depth)} className="w-full sm:w-28 bg-bg-primary border border-border-default rounded-md px-3 py-2 min-h-[44px] text-text-primary text-base sm:text-sm outline-none focus:border-accent">
           <option value="string">String</option>
           <option value="object" disabled={depth>=5}>Object</option>
           <option value="array">Array</option>
         </select>
         {type==='string' && (
-          <input value={String(v || '')} onChange={(e)=>ctx.setVal([...parentPath, k], e.target.value)} placeholder="value" className="flex-1 bg-bg-primary border border-border-default rounded-md px-2 py-1.5 text-text-primary text-sm outline-none focus:border-accent" />
+          <input value={String(v || '')} onChange={(e)=>ctx.setVal([...parentPath, k], e.target.value)} placeholder="value" className="flex-1 w-full bg-bg-primary border border-border-default rounded-md px-3 py-2 min-h-[44px] text-text-primary text-base sm:text-sm outline-none focus:border-accent" />
         )}
-        <button onClick={()=>ctx.delKey(parentPath, k)} className="text-text-tertiary hover:text-red-400 text-sm ml-auto"><X className="w-4 h-4" /></button>
+        <button onClick={()=>ctx.delKey(parentPath, k)} className="text-text-tertiary hover:text-red-400 text-base sm:text-sm sm:ml-auto min-h-[44px] px-3 py-2"><X className="w-4 h-4" /></button>
       </div>
       {type==='object' && (
         <div className="mt-2 ml-4">
-          <button onClick={()=>ctx.addChild([...parentPath, k], depth+1)} disabled={depth>=5} className="px-2 py-1 rounded-md border border-border-default text-text-secondary hover:text-text-primary text-xs inline-flex items-center gap-1"><Plus className="w-3 h-3" /> Add child</button>
+          <button onClick={()=>ctx.addChild([...parentPath, k], depth+1)} disabled={depth>=5} className="w-full sm:w-auto min-h-[44px] px-3 py-3 sm:px-2 sm:py-1 rounded-md border border-border-default text-text-secondary hover:text-text-primary text-base sm:text-xs inline-flex items-center gap-1"><Plus className="w-3 h-3" /> Add child</button>
           <TraitObject obj={v} path={[...parentPath, k]} depth={depth+1} />
         </div>
       )}
       {type==='array' && (
         <div className="mt-2 ml-4 space-y-2">
           {(v as string[]).map((item, idx) => (
-            <div key={idx} className="flex items-center gap-2">
+            <div key={idx} className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
               <span className="text-xs text-text-tertiary">[{idx}]</span>
-              <input value={item} onChange={(e)=>ctx.setVal([...parentPath, k, idx], e.target.value)} placeholder="value" className="flex-1 bg-bg-primary border border-border-default rounded-md px-2 py-1.5 text-text-primary text-sm outline-none focus:border-accent" />
-              <button onClick={()=>ctx.delKey([...parentPath, k], idx)} className="text-text-tertiary hover:text-red-400 text-sm"><X className="w-4 h-4" /></button>
+              <input value={item} onChange={(e)=>ctx.setVal([...parentPath, k, idx], e.target.value)} placeholder="value" className="flex-1 w-full bg-bg-primary border border-border-default rounded-md px-3 py-2 min-h-[44px] text-text-primary text-base sm:text-sm outline-none focus:border-accent" />
+              <button onClick={()=>ctx.delKey([...parentPath, k], idx)} className="text-text-tertiary hover:text-red-400 text-base sm:text-sm min-h-[44px] px-3 py-2"><X className="w-4 h-4" /></button>
             </div>
           ))}
-          <button onClick={()=>ctx.addArrayItem([...parentPath, k])} className="px-2 py-1 rounded-md border border-border-default text-text-secondary hover:text-text-primary text-xs inline-flex items-center gap-1"><Plus className="w-3 h-3" /> Add item</button>
+          <button onClick={()=>ctx.addArrayItem([...parentPath, k])} className="w-full sm:w-auto min-h-[44px] px-3 py-3 sm:px-2 sm:py-1 rounded-md border border-border-default text-text-secondary hover:text-text-primary text-base sm:text-xs inline-flex items-center gap-1"><Plus className="w-3 h-3" /> Add item</button>
         </div>
       )}
     </div>

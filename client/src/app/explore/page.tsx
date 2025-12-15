@@ -415,19 +415,19 @@ const PublicCard = memo(function PublicCard({ item, view, onRead }: { item: Publ
   if (view === 'gallery') {
     return (
       <div ref={cardRef} className="rounded-xl border border-border-default bg-bg-elevated overflow-hidden hover:shadow-elevation hover:scale-[1.02] transition-all duration-micro flex flex-col">
-        <div className="relative w-full pt-[133%] overflow-hidden bg-bg-primary">
+        <div className="relative w-1/2 sm:w-full pt-[66%] sm:pt-[133%] overflow-hidden rounded-lg border-0 sm:border-0 bg-transparent sm:bg-bg-primary mx-auto sm:mx-0">
           {item.coverImage ? (
-            <img src={item.coverImage} alt={item.title} className="absolute inset-0 w-full h-full object-cover" />
+            <img src={item.coverImage} alt={item.title} className="absolute inset-0 w-full h-full object-contain sm:object-cover" />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center">
               <BookOpen className="w-12 h-12 text-text-tertiary/30" />
             </div>
           )}
         </div>
-        <div className="p-4 flex flex-col gap-3 flex-1">
+        <div className="p-2 sm:p-4 flex flex-col gap-2 sm:gap-3 flex-1">
           <div className="flex items-start gap-2">
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-semibold text-text-primary truncate">{item.title}</div>
+              <div className="text-xs sm:text-sm font-semibold text-text-primary truncate">{item.title}</div>
               <div className="text-xs text-text-tertiary">{labelMode(item.mode)}</div>
             </div>
             <span className={`px-2 py-0.5 rounded text-xs font-bold flex-shrink-0 ${rankColors[rank]}`}>{rank}</span>
