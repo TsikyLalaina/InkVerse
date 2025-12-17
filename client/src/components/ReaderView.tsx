@@ -17,6 +17,25 @@ type Chapter = {
 
 export type ReaderMode = 'novel' | 'manhwa';
 
+export type ReaderSettings = {
+  fontSize: number;
+  lineHeight: number;
+  paragraphSpacing: number;
+  contentWidth: 'narrow' | 'medium' | 'wide';
+  contentPadding?: number;
+  contentMargin?: number;
+  paginate: boolean;
+  fontFamily: 'sans' | 'serif' | 'dyslexia';
+  letterSpacing: number;
+  textAlign: 'left' | 'justify';
+  firstLineIndent: number;
+  hyphenate: boolean;
+  localTheme: 'inherit' | 'light' | 'dark';
+  preset: 'none' | 'sepia' | 'dim' | 'high';
+  contrast: number;
+  pageColor?: string;
+};
+
 export function ReaderView({
   projectId,
   mode,
@@ -25,6 +44,7 @@ export function ReaderView({
   targetPanelIndex,
   targetScrollPercent,
   onProgress,
+  readerSettings,
 }: {
   projectId: string;
   mode: ReaderMode;
@@ -33,6 +53,7 @@ export function ReaderView({
   targetPanelIndex?: number | null;
   targetScrollPercent?: number | null;
   onProgress?: (percent: number, meta?: { index: number; total: number; id?: string }) => void;
+  readerSettings?: ReaderSettings;
 }) {
   const supabase = useSupabase();
   const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -331,11 +352,52 @@ export function ReaderView({
     };
   }, [mode, getScrollPct, images.length, onProgress]);
 
-  if (loading) return <div className="p-4 text-slate-400">Loading…</div>;
-  if (error) return <div className="p-4 text-red-400">{error}</div>;
+  if (loading) return <div className="p-4 text-text-secondary">Loading…</div>;
+  if (error) return <div className="p-4 text-red-500">{error}</div>;
 
   // Novel mode: simple vertical stack to avoid any absolute positioning overlaps
   if (mode === 'novel') {
+    const s = readerSettings;
+    const maxWidth = s?.contentWidth === 'narrow' ? '40rem' : s?.contentWidth === 'medium' ? '48rem' : '64rem';
+    const fontFamily = s?.fontFamily === 'serif' ? 'ui-serif, Georgia, serif' : s?.fontFamily === 'dyslexia' ? 'OpenDyslexic, Lexend, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif' : 'system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
+    const deriveColors = () => {
+      // Base colors
+      let bg = undefined as string | undefined;
+      let fg = undefined as string | undefined;
+      if (s?.localTheme === 'light') { bg = '#ffffff'; fg = '#0f172a'; }
+      if (s?.localTheme === 'dark') { bg = '#0F1117'; fg = '#ffffff'; }
+      if (s?.preset === 'sepia') { bg = '#FDF6E3'; fg = '#3F3A2C'; }
+      if (s?.preset === 'dim') { bg = '#111827'; fg = '#E5E7EB'; }
+      if (s?.preset === 'high') { bg = '#ffffff'; fg = '#000000'; }
+      if (s?.pageColor) bg = s.pageColor;
+      return { bg, fg };
+    };
+    const colors = deriveColors();
+    const containerStyle: React.CSSProperties = {
+      backgroundColor: colors.bg,
+      color: colors.fg,
+      filter: s ? `contrast(${s.contrast}%)` : undefined,
+      fontFamily,
+      hyphens: s?.hyphenate ? 'auto' as any : 'manual',
+      WebkitHyphens: s?.hyphenate ? 'auto' as any : 'manual',
+      wordBreak: s?.hyphenate ? 'auto-phrase' as any : 'normal',
+      scrollSnapType: s?.paginate ? ('y mandatory' as any) : undefined,
+    };
+    const contentStyle: React.CSSProperties = {
+      maxWidth,
+      paddingLeft: typeof s?.contentPadding === 'number' ? s.contentPadding : undefined,
+      paddingRight: typeof s?.contentPadding === 'number' ? s.contentPadding : undefined,
+      marginLeft: typeof s?.contentMargin === 'number' ? s.contentMargin : undefined,
+      marginRight: typeof s?.contentMargin === 'number' ? s.contentMargin : undefined,
+    };
+    const pStyle: React.CSSProperties = s ? {
+      fontSize: `${s.fontSize}px`,
+      lineHeight: s.lineHeight,
+      letterSpacing: `${s.letterSpacing}px`,
+      textAlign: s.textAlign,
+      textIndent: `${s.firstLineIndent}px`,
+      marginBottom: `${s.paragraphSpacing}px`,
+    } : {};
     const onScroll = (e: React.UIEvent<HTMLDivElement>) => {
       const el = e.currentTarget;
       if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) {
@@ -367,27 +429,40 @@ export function ReaderView({
       } catch {}
     };
     return (
-      <div ref={novelContainerRef} className="w-full h-full overflow-y-auto" role="feed" onScroll={onScroll}>
-        <div className="mx-auto max-w-3xl flex flex-col gap-12 px-4 py-6">
+      <div ref={novelContainerRef} className="w-full h-full overflow-y-auto bg-bg-primary text-text-primary" role="feed" onScroll={onScroll} style={containerStyle}>
+        <div className="mx-auto max-w-3xl flex flex-col gap-12 px-4 py-6" style={contentStyle}>
           {chapters.map((ch) => (
             <section
               key={ch.id}
               ref={(el) => { sectionRefs.current[ch.id] = el; }}
-              className="border-t border-cyan-500/30 pt-8"
+              className="border-t border-border-default pt-8"
+              style={s?.paginate ? ({ scrollSnapAlign: 'start' } as any) : undefined}
             >
-              <h3 className="text-xl font-semibold mb-3">{ch.title}</h3>
-              <p className="leading-relaxed text-gray-300 whitespace-pre-wrap">{ch.content}</p>
+              <h3 className="text-xl font-semibold mb-3 text-text-primary">{ch.title}</h3>
+              <p className="leading-relaxed text-text-primary whitespace-pre-wrap" style={pStyle}>{ch.content}</p>
             </section>
           ))}
-          {loadingMore && <div className="text-sm text-slate-400">Loading more…</div>}
+          {loadingMore && <div className="text-sm text-text-secondary">Loading more…</div>}
         </div>
       </div>
     );
   }
 
   // Manhwa mode: keep virtualization for performance
+  const s = readerSettings;
+  const manhwaColors = (() => {
+    if (!s) return {} as any;
+    let bg: string | undefined;
+    if (s.localTheme === 'light') bg = '#ffffff';
+    if (s.localTheme === 'dark') bg = '#0F1117';
+    if (s.preset === 'sepia') bg = '#FDF6E3';
+    if (s.preset === 'dim') bg = '#111827';
+    if (s.preset === 'high') bg = '#ffffff';
+    if (s.pageColor) bg = s.pageColor;
+    return { bg };
+  })();
   return (
-    <div className="w-full h-full overflow-hidden" role="feed">
+    <div className="w-full h-full overflow-hidden" role="feed" style={{ backgroundColor: manhwaColors.bg, filter: s ? `contrast(${s.contrast}%)` : undefined }}>
       <div className="h-full">
         <AutoSizer>
           {({ height, width }: { height: number; width: number }) => (

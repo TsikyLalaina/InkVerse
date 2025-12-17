@@ -196,6 +196,152 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     }
   });
 
+  /**
+   * GET /api/user/profile
+   * Get current user's profile (username, profilePhoto, theme)
+   */
+  app.get('/user/profile', async (req, reply) => {
+    const user = (req as any).user;
+    if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
+
+    try {
+      const profile = await prisma.userProfile.findUnique({
+        where: { userId: user.id },
+      });
+
+      return reply.send({
+        userId: user.id,
+        email: user.email,
+        username: profile?.username || null,
+        profilePhoto: profile?.profilePhoto || null,
+        theme: profile?.theme === 'dark' ? 'dark' : 'light',
+      });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: 'Failed to fetch profile' });
+    }
+  });
+
+  /**
+   * POST /api/user/check-username
+   * Check if username is available
+   * Body: { username: string }
+   */
+  app.post('/user/check-username', async (req, reply) => {
+    const { username } = req.body as { username?: string };
+
+    if (!username || typeof username !== 'string' || username.trim().length === 0) {
+      return reply.code(400).send({ error: 'Username is required' });
+    }
+
+    const trimmed = username.trim();
+
+    // Validate username format (alphanumeric, underscore, hyphen, 3-20 chars)
+    if (!/^[a-zA-Z0-9_-]{3,20}$/.test(trimmed)) {
+      return reply.code(400).send({ 
+        error: 'Username must be 3-20 characters and contain only letters, numbers, underscores, and hyphens' 
+      });
+    }
+
+    try {
+      const existing = await prisma.userProfile.findUnique({
+        where: { username: trimmed },
+      });
+
+      return reply.send({
+        available: !existing,
+        username: trimmed,
+      });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: 'Failed to check username' });
+    }
+  });
+
+  /**
+   * PATCH /api/user/profile
+   * Update current user's profile (username, profilePhoto, theme)
+   * Body: { username?: string, profilePhoto?: string, theme?: string }
+   */
+  app.patch('/user/profile', async (req, reply) => {
+    const user = (req as any).user;
+    if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
+
+    const { username, profilePhoto, theme } = req.body as { username?: string; profilePhoto?: string; theme?: string };
+
+    try {
+      // If username is provided, validate and check availability
+      if (username !== undefined) {
+        if (typeof username !== 'string' || username.trim().length === 0) {
+          return reply.code(400).send({ error: 'Username must be a non-empty string' });
+        }
+
+        const trimmed = username.trim();
+
+        // Validate username format
+        if (!/^[a-zA-Z0-9_-]{3,20}$/.test(trimmed)) {
+          return reply.code(400).send({ 
+            error: 'Username must be 3-20 characters and contain only letters, numbers, underscores, and hyphens' 
+          });
+        }
+
+        // Check if username is already taken by another user
+        const existing = await prisma.userProfile.findUnique({
+          where: { username: trimmed },
+        });
+
+        if (existing && existing.userId !== user.id) {
+          return reply.code(409).send({ error: 'Username is already taken' });
+        }
+
+        // Upsert user profile with new username
+        await prisma.userProfile.upsert({
+          where: { userId: user.id },
+          update: { username: trimmed, updatedAt: new Date() },
+          create: { userId: user.id, username: trimmed },
+        });
+      }
+
+      // Update profilePhoto if provided
+      if (profilePhoto !== undefined) {
+        await prisma.userProfile.upsert({
+          where: { userId: user.id },
+          update: { profilePhoto, updatedAt: new Date() },
+          create: { userId: user.id, username: `user_${user.id.slice(0, 8)}`, profilePhoto },
+        });
+      }
+
+      // Update theme if provided
+      if (theme !== undefined) {
+        if (!['light', 'dark'].includes(theme)) {
+          return reply.code(400).send({ error: 'Theme must be "light" or "dark"' });
+        }
+        await prisma.userProfile.upsert({
+          where: { userId: user.id },
+          update: { theme, updatedAt: new Date() },
+          create: { userId: user.id, username: `user_${user.id.slice(0, 8)}`, theme },
+        });
+      }
+
+      const profile = await prisma.userProfile.findUnique({
+        where: { userId: user.id },
+      });
+
+      return reply.send({
+        success: true,
+        userId: user.id,
+        email: user.email,
+        username: profile?.username || null,
+        profilePhoto: profile?.profilePhoto || null,
+        theme: profile?.theme || 'system',
+        message: 'Profile updated successfully',
+      });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: 'Failed to update profile' });
+    }
+  });
+
   done();
 };
 

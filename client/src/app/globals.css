@@ -3,29 +3,50 @@
 @tailwind utilities;
 
 :root {
-  /* Backgrounds */
-  --bg-primary: #0F1117;
-  --bg-elevated: #18191F;
-  --bg-hover: #1F2028;
-  --border: #2A2B35;
-  
+  /* Light theme (default) */
+  --bg-primary: #ffffff;
+  --bg-elevated: #f8fafc; /* slate-50 */
+  --bg-hover: #f1f5f9;    /* slate-100 */
+  --border: #e5e7eb;      /* gray-200 */
+
   /* Typography */
-  --text-primary: #FFFFFF;
-  --text-secondary: #A0A0AB;
-  --text-tertiary: #6B6B76;
-  
+  --text-primary: #0f172a;   /* slate-900 */
+  --text-secondary: #334155; /* slate-700 */
+  --text-tertiary: #64748b;  /* slate-500 */
+
   /* Accent Colors */
   --accent-primary: #3B82F6;
   --accent-hover: #4F8FF7;
-  
+
   /* Semantic Colors */
   --success: #10b981;
   --gold-start: #fbbf24;
   --gold-end: #f59e0b;
   --warning: #f59e0b;
-  
+
   /* Legacy support */
   --foreground: 240 5.9% 10%;
+  --background: 0 0% 100%;
+}
+
+.dark {
+  /* Dark theme overrides */
+  --bg-primary: #0F1117;
+  --bg-elevated: #18191F;
+  --bg-hover: #1F2028;
+  --border: #2A2B35;
+
+  /* Typography */
+  --text-primary: #FFFFFF;
+  --text-secondary: #A0A0AB;
+  --text-tertiary: #6B6B76;
+
+  /* Accent Colors */
+  --accent-primary: #3B82F6;
+  --accent-hover: #4F8FF7;
+
+  /* Legacy support */
+  --foreground: 0 0% 98%;
   --background: 222 47% 11%;
 }
 

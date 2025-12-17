@@ -202,3 +202,17 @@ model Bookmark {
   @@map("bookmarks")
   @@schema("public")
 }
+
+model UserProfile {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String    @unique @map("user_id") @db.Uuid
+  username     String    @unique
+  profilePhoto String?   @map("profile_photo") // URL to profile photo in Supabase Storage
+  theme        String    @default("system") @map("theme") // "light", "dark", or "system"
+  createdAt    DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime? @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([userId], map: "idx_user_profile_user_id")
+  @@map("user_profiles")
+  @@schema("public")
+}

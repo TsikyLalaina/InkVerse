@@ -8,6 +8,8 @@ import { useRouter } from "next/navigation";
 import { useSupabase } from "@/components/providers/SupabaseProvider";
 import { createApi } from "@/lib/api";
 import { ReaderView } from "@/components/ReaderView";
+import { ProfileSettingsModal } from "@/components/ProfileSettingsModal";
+import { useTheme } from "@/components/providers/ThemeProvider";
 
 type ProjectItem = {
   id: string;
@@ -59,6 +61,7 @@ export default function DashboardPage() {
   const [readerFiltersOpen, setReaderFiltersOpen] = useState(false);
   const [readerControlsOpen, setReaderControlsOpen] = useState(false);
   const [isLargeScreen, setIsLargeScreen] = useState(false);
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
 
   // Check screen size on mount and resize
   useEffect(() => {
@@ -360,7 +363,7 @@ export default function DashboardPage() {
         <div className="pointer-events-none absolute inset-0 opacity-30" style={{ backgroundImage: `linear-gradient(rgba(0,255,255,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(0,255,255,0.06) 1px, transparent 1px)`, backgroundSize: "32px 32px" }} />
       )}
       <div className="relative">
-        <TopBar mode={mode} onModeChange={setMode} userInitial={userInitial} onSignOut={onSignOut} userStats={userStats} />
+        <TopBar mode={mode} onModeChange={setMode} userInitial={userInitial} onSignOut={onSignOut} userStats={userStats} onProfileClick={() => setProfileModalOpen(true)} />
         {mode === "CREATE" ? (
           <MainLayout
             showToggleButtons
@@ -475,6 +478,7 @@ export default function DashboardPage() {
             onClose={() => !exportAllLoading && setExportAllDialog(false)}
           />
         )}
+        <ProfileSettingsModal isOpen={profileModalOpen} onClose={() => setProfileModalOpen(false)} />
       </div>
     </div>
   );
@@ -577,7 +581,7 @@ function ExportAllDialog({ projectCount, loading, onExport, onClose }: { project
   );
 }
 
-function TopBar({ mode, onModeChange, userInitial, onSignOut, userStats }: { mode: Mode; onModeChange: (m: Mode) => void; userInitial: string; onSignOut: () => void; userStats?: any }) {
+function TopBar({ mode, onModeChange, userInitial, onSignOut, userStats, onProfileClick }: { mode: Mode; onModeChange: (m: Mode) => void; userInitial: string; onSignOut: () => void; userStats?: any; onProfileClick: () => void }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const level = userStats?.level || 1;
@@ -610,8 +614,7 @@ function TopBar({ mode, onModeChange, userInitial, onSignOut, userStats }: { mod
           </button>
           {open && (
             <div role="menu" className="absolute right-0 top-10 w-40 rounded-md border border-border-default bg-bg-elevated shadow-elevation text-sm">
-              <button className="w-full text-left px-3 py-2 hover:bg-bg-hover text-text-secondary transition-micro" onClick={() => { setOpen(false); /* placeholder */ }}>Profile</button>
-              <button className="w-full text-left px-3 py-2 hover:bg-bg-hover text-text-secondary transition-micro" onClick={() => { setOpen(false); /* placeholder */ }}>Settings</button>
+              <button className="w-full text-left px-3 py-2 hover:bg-bg-hover text-text-secondary transition-micro" onClick={() => { setOpen(false); onProfileClick(); }}>Profile</button>
               <div className="border-t border-border-default" />
               <button className="w-full text-left px-3 py-2 hover:bg-bg-hover text-red-400 transition-micro" onClick={() => { setOpen(false); onSignOut(); }}>Sign out</button>
             </div>
@@ -1145,6 +1148,7 @@ function RightControls({ sort, onSort, view, onView }: { sort: "recent" | "rank"
 
 function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: string; initialMode: "novel" | "manhwa"; onClose: () => void; }) {
   const supabase = useSupabase();
+  const { isDark } = useTheme();
   const apiBase = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, '');
   const [mode, setMode] = useState<"novel" | "manhwa">(initialMode);
   const [chapters, setChapters] = useState<Array<{ id: string; title: string }>>([]);
@@ -1168,6 +1172,32 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
   const [targetScrollPct, setTargetScrollPct] = useState<number | null>(null);
   const [isLargeScreen, setIsLargeScreen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  // Reader Settings UI state
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [hideTopBar, setHideTopBar] = useState(false);
+  const [overlayOpacity, setOverlayOpacity] = useState(0.6);
+  const [overlayBlur, setOverlayBlur] = useState(12);
+  const [readerSettings, setReaderSettings] = useState({
+    fontSize: 16,
+    lineHeight: 1.6,
+    paragraphSpacing: 10,
+    contentWidth: 'wide' as 'narrow' | 'medium' | 'wide',
+    contentPadding: 16,
+    contentMargin: 0,
+    paginate: false,
+    fontFamily: 'sans' as 'sans' | 'serif' | 'dyslexia',
+    letterSpacing: 0,
+    textAlign: 'left' as 'left' | 'justify',
+    firstLineIndent: 0,
+    hyphenate: false,
+    localTheme: 'inherit' as 'inherit' | 'light' | 'dark',
+    preset: 'none' as 'none' | 'sepia' | 'dim' | 'high',
+    contrast: 100,
+    pageColor: '',
+    showLeft: true,
+    showRight: true,
+  });
 
   useEffect(() => {
     const checkScreenSize = () => {
@@ -1218,28 +1248,27 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
       }
     } catch {}
   };
+  
+  const overlayBg = isDark ? `rgba(15,17,23,${overlayOpacity})` : `rgba(255,255,255,${overlayOpacity})`;
 
   return (
-    <div ref={wrapRef} className="fixed inset-0 z-30 bg-bg-primary/95 backdrop-blur-soft">
-      <div className="h-12 md:h-12 border-b border-border-default px-3 md:px-4 flex items-center justify-between gap-2 md:gap-4 overflow-x-auto">
+    <div ref={wrapRef} className="fixed inset-0 z-30" style={{ backgroundColor: overlayBg, backdropFilter: `blur(${overlayBlur}px)`, WebkitBackdropFilter: `blur(${overlayBlur}px)` }}>
+      <div className={`h-12 md:h-12 border-b border-border-default px-3 md:px-4 flex items-center justify-between gap-2 md:gap-4 overflow-x-auto bg-transparent ${hideTopBar ? 'hidden' : ''}`}>
         <div className="flex items-center gap-1 md:gap-2 flex-shrink-0">
           <div className="text-xs md:text-sm text-text-primary hidden sm:block">Mode</div>
           <div className="bg-bg-hover/60 rounded-full p-1 flex text-xs">
             <button className={`px-2 md:px-3 py-1 rounded-full transition-micro text-xs md:text-sm ${mode === 'novel' ? 'bg-accent text-black font-semibold' : 'text-text-secondary hover:text-text-primary'}`} onClick={() => setMode('novel')}>Novel</button>
             <button className={`px-2 md:px-3 py-1 rounded-full transition-micro text-xs md:text-sm ${mode === 'manhwa' ? 'bg-accent text-black font-semibold' : 'text-text-secondary hover:text-text-primary'}`} onClick={() => setMode('manhwa')}>Manhwa</button>
           </div>
-          <div className="ml-1 md:ml-2 flex items-center gap-1 md:gap-2 text-xs">
-            <button onClick={() => setLeftCollapsed(v => !v)} className="rounded-md border border-border-default px-1.5 md:px-2 py-1 text-text-secondary hover:bg-bg-hover transition-micro text-xs">{leftCollapsed ? 'L' : 'L'}</button>
-            <button onClick={() => setRightCollapsed(v => !v)} className="rounded-md border border-border-default px-1.5 md:px-2 py-1 text-text-secondary hover:bg-bg-hover transition-micro text-xs">{rightCollapsed ? 'R' : 'R'}</button>
-          </div>
+          
         </div>
         <div className="flex items-center gap-1 md:gap-2 flex-shrink-0">
           <button onClick={toggleFs} className="rounded-md border border-border-default px-2 md:px-3 py-1 md:py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro">{fs ? 'Exit' : 'Full'}</button>
-          <button className="rounded-md border border-border-default px-2 md:px-3 py-1 md:py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro hidden md:block" disabled>Settings</button>
+          <button onClick={() => setSettingsOpen(v => !v)} className="rounded-md border border-border-default px-2 md:px-3 py-1 md:py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro hidden md:block">Settings</button>
           <button onClick={onClose} className="rounded-md bg-accent px-2 md:px-3 py-1 md:py-1.5 text-xs font-semibold text-black hover:bg-accent-hover transition-micro">Exit</button>
         </div>
       </div>
-      <div className="grid grid-rows-[1fr_auto] h-[calc(100%-3rem)] min-h-0">
+      <div className={`grid grid-rows-[1fr_auto] ${hideTopBar ? 'h-full' : 'h-[calc(100%-3rem)]'} min-h-0`}>
         <div
           className={
             `grid h-full min-h-0 ` +
@@ -1252,7 +1281,7 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
           }
         >
           {!leftCollapsed && (
-          <aside className="border-r border-border-default overflow-y-auto p-2 md:p-3 bg-bg-elevated w-full md:w-auto">
+          <aside className="border-r border-border-default overflow-y-auto p-2 md:p-3 bg-transparent w-full md:w-auto">
             <div className="text-xs text-text-tertiary mb-2">Chapter List</div>
             <div className="flex flex-col gap-1">
               {chapters.map((c) => (
@@ -1261,7 +1290,7 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
             </div>
           </aside>
           )}
-          <main className="overflow-hidden min-h-0">
+          <main className="overflow-hidden min-h-0 bg-transparent text-text-primary">
             <div className="h-full">
               <ReaderView
                 projectId={projectId}
@@ -1270,6 +1299,7 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
                 onChapterInView={(id) => setActiveCh(id)}
                 targetPanelIndex={targetPanelIdx}
                 targetScrollPercent={targetScrollPct}
+                readerSettings={readerSettings}
                 onProgress={(pct, meta) => {
                   setProgress(Math.max(0, Math.min(100, pct || 0)));
                   if (mode === 'manhwa') {
@@ -1283,7 +1313,7 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
             </div>
           </main>
           {!rightCollapsed && (
-          <aside className="border-l border-border-default overflow-hidden flex flex-col bg-bg-elevated w-full md:w-auto">
+          <aside className="border-l border-border-default overflow-hidden flex flex-col bg-transparent w-full md:w-auto">
             <div className="flex-1 overflow-y-auto">
               {editingBookmarkId ? (
                 <div className="p-4 space-y-3 border-b border-border-default">
@@ -1410,7 +1440,7 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
           </aside>
           )}
         </div>
-        <div className="h-auto md:h-14 border-t border-border-default px-3 md:px-4 py-2 md:py-0 flex flex-col md:flex-row items-start md:items-center gap-2 md:gap-3 bg-bg-elevated">
+        <div className="h-auto md:h-14 border-t border-border-default px-3 md:px-4 py-2 md:py-0 flex flex-col md:flex-row items-start md:items-center gap-2 md:gap-3 bg-transparent">
           <div className="flex items-center gap-2 w-full md:flex-1">
             <div className="text-xs text-text-tertiary flex-shrink-0">Progress</div>
             <div className="flex-1 h-2 bg-bg-hover rounded-full overflow-hidden">
@@ -1466,6 +1496,92 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
           </button>
         </div>
       </div>
+      {settingsOpen && (
+        <div className={`fixed ${hideTopBar ? 'top-0' : 'top-12'} right-0 bottom-0 w-80 bg-bg-elevated border-l border-border-default p-4 overflow-y-auto z-40`}>
+          <div className="text-sm font-semibold text-text-primary mb-3">Reader Settings</div>
+          <div className="space-y-4 text-xs">
+            <div>
+              <div className="text-text-tertiary font-semibold mb-2">Display & Layout</div>
+              <label className="block mb-1 text-text-secondary">Font size: {readerSettings.fontSize}px</label>
+              <input type="range" min={12} max={28} step={1} value={readerSettings.fontSize} onChange={(e) => setReaderSettings(s => ({ ...s, fontSize: Number(e.target.value) }))} className="w-full" />
+              <label className="block mt-3 mb-1 text-text-secondary">Line height: {readerSettings.lineHeight.toFixed(1)}</label>
+              <input type="range" min={1.2} max={2} step={0.1} value={readerSettings.lineHeight} onChange={(e) => setReaderSettings(s => ({ ...s, lineHeight: Number(e.target.value) }))} className="w-full" />
+              <label className="block mt-3 mb-1 text-text-secondary">Paragraph spacing: {readerSettings.paragraphSpacing}px</label>
+              <input type="range" min={0} max={36} step={1} value={readerSettings.paragraphSpacing} onChange={(e) => setReaderSettings(s => ({ ...s, paragraphSpacing: Number(e.target.value) }))} className="w-full" />
+              <label className="block mt-3 mb-1 text-text-secondary">Content width</label>
+              <select className="w-full bg-bg-primary border border-border-default rounded px-2 py-1 text-text-primary" value={readerSettings.contentWidth} onChange={(e) => setReaderSettings(s => ({ ...s, contentWidth: e.target.value as any }))}>
+                <option value="narrow">Narrow</option>
+                <option value="medium">Medium</option>
+                <option value="wide">Wide</option>
+              </select>
+              <label className="block mt-3 mb-1 text-text-secondary">Content padding: {readerSettings.contentPadding}px</label>
+              <input type="range" min={0} max={48} step={2} value={readerSettings.contentPadding} onChange={(e) => setReaderSettings(s => ({ ...s, contentPadding: Number(e.target.value) }))} className="w-full" />
+              <label className="block mt-3 mb-1 text-text-secondary">Content margin: {readerSettings.contentMargin}px</label>
+              <input type="range" min={0} max={64} step={2} value={readerSettings.contentMargin} onChange={(e) => setReaderSettings(s => ({ ...s, contentMargin: Number(e.target.value) }))} className="w-full" />
+              <div className="mt-3 flex items-center gap-2">
+                <input id="hideTopBar" type="checkbox" checked={hideTopBar} onChange={(e) => setHideTopBar(e.target.checked)} />
+                <label htmlFor="hideTopBar" className="text-text-secondary">Hide top bar</label>
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <input id="showLeft" type="checkbox" checked={!leftCollapsed} onChange={(e) => setLeftCollapsed(!e.target.checked)} />
+                <label htmlFor="showLeft" className="text-text-secondary">Show left sidebar</label>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <input id="showRight" type="checkbox" checked={!rightCollapsed} onChange={(e) => setRightCollapsed(!e.target.checked)} />
+                <label htmlFor="showRight" className="text-text-secondary">Show right sidebar</label>
+              </div>
+              <label className="block mt-3 mb-1 text-text-secondary">Overlay opacity: {Math.round(overlayOpacity * 100)}%</label>
+              <input type="range" min={0} max={1} step={0.01} value={overlayOpacity} onChange={(e) => setOverlayOpacity(Number(e.target.value))} className="w-full" />
+              <label className="block mt-3 mb-1 text-text-secondary">Overlay blur: {overlayBlur}px</label>
+              <input type="range" min={0} max={20} step={1} value={overlayBlur} onChange={(e) => setOverlayBlur(Number(e.target.value))} className="w-full" />
+            </div>
+
+            <div>
+              <div className="text-text-tertiary font-semibold mb-2">Typography</div>
+              <label className="block mb-1 text-text-secondary">Font family</label>
+              <select className="w-full bg-bg-primary border border-border-default rounded px-2 py-1 text-text-primary" value={readerSettings.fontFamily} onChange={(e) => setReaderSettings(s => ({ ...s, fontFamily: e.target.value as any }))}>
+                <option value="sans">Sans</option>
+                <option value="serif">Serif</option>
+                <option value="dyslexia">Dyslexia-friendly</option>
+              </select>
+              <label className="block mt-3 mb-1 text-text-secondary">Letter spacing: {readerSettings.letterSpacing}px</label>
+              <input type="range" min={-1} max={2} step={0.1} value={readerSettings.letterSpacing} onChange={(e) => setReaderSettings(s => ({ ...s, letterSpacing: Number(e.target.value) }))} className="w-full" />
+              <label className="block mt-3 mb-1 text-text-secondary">Justification</label>
+              <select className="w-full bg-bg-primary border border-border-default rounded px-2 py-1 text-text-primary" value={readerSettings.textAlign} onChange={(e) => setReaderSettings(s => ({ ...s, textAlign: e.target.value as any }))}>
+                <option value="left">Left</option>
+                <option value="justify">Justify</option>
+              </select>
+              <label className="block mt-3 mb-1 text-text-secondary">First-line indent: {readerSettings.firstLineIndent}px</label>
+              <input type="range" min={0} max={64} step={2} value={readerSettings.firstLineIndent} onChange={(e) => setReaderSettings(s => ({ ...s, firstLineIndent: Number(e.target.value) }))} className="w-full" />
+              <div className="mt-3 flex items-center gap-2">
+                <input id="hyphenate" type="checkbox" checked={readerSettings.hyphenate} onChange={(e) => setReaderSettings(s => ({ ...s, hyphenate: e.target.checked }))} />
+                <label htmlFor="hyphenate" className="text-text-secondary">Hyphenation</label>
+              </div>
+            </div>
+
+            <div>
+              <div className="text-text-tertiary font-semibold mb-2">Theme & Colors</div>
+              <label className="block mb-1 text-text-secondary">Local theme</label>
+              <select className="w-full bg-bg-primary border border-border-default rounded px-2 py-1 text-text-primary" value={readerSettings.localTheme} onChange={(e) => setReaderSettings(s => ({ ...s, localTheme: e.target.value as any }))}>
+                <option value="inherit">Inherit app</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+              <label className="block mt-3 mb-1 text-text-secondary">Preset</label>
+              <select className="w-full bg-bg-primary border border-border-default rounded px-2 py-1 text-text-primary" value={readerSettings.preset} onChange={(e) => setReaderSettings(s => ({ ...s, preset: e.target.value as any }))}>
+                <option value="none">None</option>
+                <option value="sepia">Sepia</option>
+                <option value="dim">Dim</option>
+                <option value="high">High Contrast</option>
+              </select>
+              <label className="block mt-3 mb-1 text-text-secondary">Page color</label>
+              <input type="color" value={readerSettings.pageColor || '#000000'} onChange={(e) => setReaderSettings(s => ({ ...s, pageColor: e.target.value }))} className="w-full h-8 p-0 border border-border-default rounded" />
+              <label className="block mt-3 mb-1 text-text-secondary">Reader contrast: {readerSettings.contrast}%</label>
+              <input type="range" min={80} max={140} step={1} value={readerSettings.contrast} onChange={(e) => setReaderSettings(s => ({ ...s, contrast: Number(e.target.value) }))} className="w-full" />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

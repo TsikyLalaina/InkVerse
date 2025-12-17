@@ -342,6 +342,31 @@ export function createApi(supabase: SupabaseClient) {
 
     deleteBookmark: (projectId: string, bookmarkId: string) =>
       apiFetch<void>(supabase, `/api/project/${projectId}/bookmarks/${bookmarkId}`, { method: 'DELETE' }),
+
+    // User Profile
+    getUserProfile: () =>
+      apiFetch<{ userId: string; email: string; username: string | null }>(supabase, `/api/user/profile`),
+
+    checkUsernameAvailability: (username: string) =>
+      apiFetch<{ available: boolean; username: string }>(supabase, `/api/user/check-username`, {
+        method: 'POST',
+        body: JSON.stringify({ username }),
+      }),
+
+    updateUserProfile: (body: { username: string }) =>
+      apiFetch<{ success: boolean; userId: string; email: string; username: string | null; message: string }>(
+        supabase,
+        `/api/user/profile`,
+        { method: 'PATCH', body: JSON.stringify(body) }
+      ),
+
+    // Generic GET/POST/PATCH/DELETE for flexibility
+    get: (path: string) => apiFetch<any>(supabase, path),
+    post: (path: string, body: any) =>
+      apiFetch<any>(supabase, path, { method: 'POST', body: JSON.stringify(body) }),
+    patch: (path: string, body: any) =>
+      apiFetch<any>(supabase, path, { method: 'PATCH', body: JSON.stringify(body) }),
+    delete: (path: string) => apiFetch<any>(supabase, path, { method: 'DELETE' }),
   };
 }
 

@@ -538,8 +538,8 @@ function PublicReaderOverlay({ slug, initialMode, onClose }: { slug: string; ini
   }, [slug, api]);
 
   return (
-    <div ref={wrapRef} className="fixed inset-0 z-30 bg-bg-primary/95 backdrop-blur-soft">
-      <div className="h-12 border-b border-border-default px-4 flex items-center justify-between">
+    <div ref={wrapRef} className="fixed inset-0 z-30 bg-white/95 dark:bg-[#0F1117]/95 backdrop-blur-soft">
+      <div className="h-12 border-b border-border-default px-4 flex items-center justify-between bg-bg-primary">
         <div className="flex items-center gap-4">
           <button
             onClick={onClose}
@@ -616,7 +616,7 @@ function PublicReaderOverlay({ slug, initialMode, onClose }: { slug: string; ini
         )}
 
         {/* Main content */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto bg-bg-primary text-text-primary">
           {activeCh ? (
             <ChapterContent slug={slug} chapterId={activeCh} mode={mode} />
           ) : (
@@ -675,22 +675,22 @@ function ChapterContent({ slug, chapterId, mode }: { slug: string; chapterId: st
   }
 
   return (
-    <div className="max-w-4xl mx-auto px-8 py-12">
+    <div className="max-w-4xl mx-auto px-8 py-12 bg-bg-primary text-text-primary">
       <h1 className="text-3xl font-bold text-text-primary mb-2">{chapter.title}</h1>
       <div className="text-sm text-text-tertiary mb-8">
         {new Date(chapter.createdAt).toLocaleDateString()}
       </div>
 
       {mode === 'novel' ? (
-        <div className="prose prose-invert max-w-none">
-          <div className="text-text-secondary leading-relaxed whitespace-pre-wrap">
+        <div className="prose dark:prose-invert max-w-none">
+          <div className="text-text-primary leading-relaxed whitespace-pre-wrap">
             {chapter.content}
           </div>
         </div>
       ) : (
         <div className="space-y-4">
           {chapter.panelScript && (
-            <div className="text-text-secondary leading-relaxed whitespace-pre-wrap">
+            <div className="text-text-primary leading-relaxed whitespace-pre-wrap">
               {chapter.panelScript}
             </div>
           )}

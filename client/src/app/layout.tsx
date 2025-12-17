@@ -1,6 +1,7 @@
 import './globals.css';
 import type { Metadata } from 'next';
 import { RegisterSW } from '@/components/pwa/RegisterSW';
+import { ThemeProvider } from '@/components/providers/ThemeProvider';
 import nextDynamic from 'next/dynamic';
 
 export const dynamic = 'force-dynamic';
@@ -22,11 +23,13 @@ const SupabaseProvider = nextDynamic(
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen bg-slate-950 text-slate-100">
-        <SupabaseProvider>
-          {children}
-        </SupabaseProvider>
+    <html lang="en" suppressHydrationWarning>
+      <body className="min-h-screen bg-bg-primary text-text-primary">
+        <ThemeProvider>
+          <SupabaseProvider>
+            {children}
+          </SupabaseProvider>
+        </ThemeProvider>
         <RegisterSW />
       </body>
     </html>
