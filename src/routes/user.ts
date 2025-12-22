@@ -198,7 +198,7 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
 
   /**
    * GET /api/user/profile
-   * Get current user's profile (username, profilePhoto, theme)
+   * Get current user's profile (username, profilePhoto, theme, readerSettings)
    */
   app.get('/user/profile', async (req, reply) => {
     const user = (req as any).user;
@@ -215,6 +215,7 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
         username: profile?.username || null,
         profilePhoto: profile?.profilePhoto || null,
         theme: profile?.theme === 'dark' ? 'dark' : 'light',
+        readerSettings: (profile as any)?.readerSettings || null,
       });
     } catch (err) {
       req.log.error(err);
@@ -260,14 +261,14 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
 
   /**
    * PATCH /api/user/profile
-   * Update current user's profile (username, profilePhoto, theme)
-   * Body: { username?: string, profilePhoto?: string, theme?: string }
+   * Update current user's profile (username, profilePhoto, theme, readerSettings)
+   * Body: { username?: string, profilePhoto?: string, theme?: string, readerSettings?: any }
    */
   app.patch('/user/profile', async (req, reply) => {
     const user = (req as any).user;
     if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
 
-    const { username, profilePhoto, theme } = req.body as { username?: string; profilePhoto?: string; theme?: string };
+    const { username, profilePhoto, theme, readerSettings } = req.body as { username?: string; profilePhoto?: string; theme?: string; readerSettings?: any };
 
     try {
       // If username is provided, validate and check availability
@@ -323,6 +324,18 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
         });
       }
 
+      // Update readerSettings if provided
+      if (readerSettings !== undefined) {
+        if (readerSettings !== null && typeof readerSettings !== 'object') {
+          return reply.code(400).send({ error: 'readerSettings must be a JSON object' });
+        }
+        await prisma.userProfile.upsert({
+          where: { userId: user.id },
+          update: { readerSettings: readerSettings as any, updatedAt: new Date() },
+          create: { userId: user.id, username: `user_${user.id.slice(0, 8)}`, readerSettings: readerSettings as any },
+        });
+      }
+
       const profile = await prisma.userProfile.findUnique({
         where: { userId: user.id },
       });
@@ -334,6 +347,7 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
         username: profile?.username || null,
         profilePhoto: profile?.profilePhoto || null,
         theme: profile?.theme || 'system',
+        readerSettings: (profile as any)?.readerSettings || null,
         message: 'Profile updated successfully',
       });
     } catch (err) {

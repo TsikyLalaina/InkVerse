@@ -102,13 +102,13 @@ export default function DashboardPage() {
       try {
         setLoading(true);
         setError(null);
-        
+
         // First, sync stats from database records (retroactive calculation)
         const syncedStats = await api.syncUserStats().catch(() => null);
-        
+
         // Then fetch projects and use synced stats
         const list = await api.listProjects();
-        
+
         if (!mounted) return;
         setProjects(list as ProjectItem[]);
         if (syncedStats) setUserStats(syncedStats);
@@ -148,7 +148,7 @@ export default function DashboardPage() {
             const url = `${origin}/read/${slug}`;
             await navigator.clipboard.writeText(url);
           }
-        } catch {}
+        } catch { }
       }
     } catch (e) {
       console.error(e);
@@ -157,7 +157,7 @@ export default function DashboardPage() {
     }
   }, [api, projects]);
 
-  const handleReaderSetVisibility = useCallback(async (id: string, vis: 'private'|'public') => {
+  const handleReaderSetVisibility = useCallback(async (id: string, vis: 'private' | 'public') => {
     if (vis === 'public') {
       await handleReaderShareToggle(id);
       return;
@@ -262,7 +262,7 @@ export default function DashboardPage() {
     try {
       setExportLoading(true);
       const content = await api.exportProject(exportDialog.projectId, format);
-      
+
       // Determine file extension and MIME type
       const extensions: Record<string, { ext: string; type: string }> = {
         json: { ext: 'json', type: 'application/json' },
@@ -271,7 +271,7 @@ export default function DashboardPage() {
       };
       const { ext, type } = extensions[format];
       const filename = `${exportDialog.title}.${ext}`;
-      
+
       // Create blob and download
       const blob = new Blob([content], { type });
       const url = URL.createObjectURL(blob);
@@ -282,7 +282,7 @@ export default function DashboardPage() {
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
-      
+
       setExportDialog(null);
     } catch (err) {
       console.error('Export failed:', err);
@@ -295,19 +295,19 @@ export default function DashboardPage() {
   const performExportAll = useCallback(async (format: 'json' | 'markdown' | 'text') => {
     try {
       setExportAllLoading(true);
-      
+
       // Export all projects and create a zip-like structure
       const allContent: Record<string, string> = {};
-      
+
       for (const project of projects) {
         const content = await api.exportProject(project.id, format);
         const ext = format === 'json' ? 'json' : format === 'markdown' ? 'md' : 'txt';
         allContent[`${project.title}.${ext}`] = content;
       }
-      
+
       // Create a combined file with all projects
       let combinedContent = '';
-      
+
       if (format === 'json') {
         // For JSON, create an array of all projects
         const allProjects = Object.entries(allContent).map(([filename, content]) => ({
@@ -325,12 +325,12 @@ export default function DashboardPage() {
           })
           .join(separator);
       }
-      
+
       // Download combined file
       const ext = format === 'json' ? 'json' : format === 'markdown' ? 'md' : 'txt';
       const filename = `InkVerse-Export-${new Date().toISOString().split('T')[0]}.${ext}`;
       const type = format === 'json' ? 'application/json' : format === 'markdown' ? 'text/markdown' : 'text/plain';
-      
+
       const blob = new Blob([combinedContent], { type });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -340,7 +340,7 @@ export default function DashboardPage() {
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
-      
+
       setExportAllDialog(false);
     } catch (err) {
       console.error('Export all failed:', err);
@@ -490,7 +490,7 @@ function ExportDialog({ projectTitle, loading, onExport, onClose }: { projectTit
       <div className="rounded-lg border border-border-default bg-bg-elevated p-6 shadow-lg max-w-sm w-full mx-4">
         <h2 className="text-lg font-semibold text-text-primary mb-4">Export "{projectTitle}"</h2>
         <p className="text-sm text-text-secondary mb-6">Choose export format:</p>
-        
+
         <div className="space-y-3 mb-6">
           <button
             onClick={() => onExport('markdown')}
@@ -500,16 +500,16 @@ function ExportDialog({ projectTitle, loading, onExport, onClose }: { projectTit
             📝 Markdown (.md)
             <div className="text-xs text-text-tertiary mt-1">Formatted text with sections</div>
           </button>
-          
+
           <button
             onClick={() => onExport('json')}
             disabled={loading}
             className="w-full rounded-md border border-border-default bg-bg-primary px-4 py-3 text-sm text-text-primary hover:bg-bg-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-left font-medium"
           >
-            {} JSON (.json)
+            { } JSON (.json)
             <div className="text-xs text-text-tertiary mt-1">Structured data format</div>
           </button>
-          
+
           <button
             onClick={() => onExport('text')}
             disabled={loading}
@@ -519,7 +519,7 @@ function ExportDialog({ projectTitle, loading, onExport, onClose }: { projectTit
             <div className="text-xs text-text-tertiary mt-1">Universal text format</div>
           </button>
         </div>
-        
+
         <button
           onClick={onClose}
           disabled={loading}
@@ -539,7 +539,7 @@ function ExportAllDialog({ projectCount, loading, onExport, onClose }: { project
         <h2 className="text-lg font-semibold text-text-primary mb-2">Export All Projects</h2>
         <p className="text-sm text-text-tertiary mb-6">{projectCount} project{projectCount !== 1 ? 's' : ''} will be exported</p>
         <p className="text-sm text-text-secondary mb-6">Choose export format:</p>
-        
+
         <div className="space-y-3 mb-6">
           <button
             onClick={() => onExport('markdown')}
@@ -549,16 +549,16 @@ function ExportAllDialog({ projectCount, loading, onExport, onClose }: { project
             📝 Markdown (.md)
             <div className="text-xs text-text-tertiary mt-1">Single file with all projects</div>
           </button>
-          
+
           <button
             onClick={() => onExport('json')}
             disabled={loading}
             className="w-full rounded-md border border-border-default bg-bg-primary px-4 py-3 text-sm text-text-primary hover:bg-bg-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-left font-medium"
           >
-            {} JSON (.json)
+            { } JSON (.json)
             <div className="text-xs text-text-tertiary mt-1">Structured data format</div>
           </button>
-          
+
           <button
             onClick={() => onExport('text')}
             disabled={loading}
@@ -568,7 +568,7 @@ function ExportAllDialog({ projectCount, loading, onExport, onClose }: { project
             <div className="text-xs text-text-tertiary mt-1">Universal text format</div>
           </button>
         </div>
-        
+
         <button
           onClick={onClose}
           disabled={loading}
@@ -852,14 +852,14 @@ function LeftLibrary({ modeFilter, onModeFilter, rankFilter, onRankFilter, timeF
   return (
     <aside className="w-full md:basis-1/5 bg-bg-elevated border border-border-default rounded-xl p-6 h-fit space-y-4 shadow-elevation max-h-none md:max-h-[calc(100vh-6rem)] overflow-y-auto">
       <div className="text-sm font-semibold tracking-elegant">FILTERS</div>
-      
+
       <div className="text-xs text-text-tertiary">Mode</div>
       <select value={modeFilter} onChange={(e) => onModeFilter(e.target.value as any)} className="w-full rounded-md bg-bg-primary border border-border-default px-3 py-2 text-sm text-text-primary focus:border-accent transition-colors duration-micro">
         <option value="all">All Modes</option>
         <option value="novel">Novel</option>
         <option value="manhwa">Manhwa</option>
       </select>
-      
+
       <div className="text-xs text-text-tertiary">Rank</div>
       <select value={rankFilter} onChange={(e) => onRankFilter(e.target.value as any)} className="w-full rounded-md bg-bg-primary border border-border-default px-3 py-2 text-sm text-text-primary focus:border-accent transition-colors duration-micro">
         <option value="all">All Ranks</option>
@@ -868,7 +868,7 @@ function LeftLibrary({ modeFilter, onModeFilter, rankFilter, onRankFilter, timeF
         <option value="B">B</option>
         <option value="C">C</option>
       </select>
-      
+
       <div className="text-xs text-text-tertiary">Time</div>
       <select value={timeFilter} onChange={(e) => onTimeFilter(e.target.value as any)} className="w-full rounded-md bg-bg-primary border border-border-default px-3 py-2 text-sm text-text-primary focus:border-accent transition-colors duration-micro">
         <option value="all">All Time</option>
@@ -925,7 +925,7 @@ function LeftLibrary({ modeFilter, onModeFilter, rankFilter, onRankFilter, timeF
   );
 }
 
-function ReaderCenterVault({ items, sort, view, onRead, shareLoadingId, onSetVisibility }: { items: ProjectItem[]; sort: "recent" | "rank"; view: "list" | "gallery"; onRead: (id: string, mode?: ProjectItem["mode"]) => void; shareLoadingId: string | null; onSetVisibility: (id: string, vis: 'private'|'public') => void; }) {
+function ReaderCenterVault({ items, sort, view, onRead, shareLoadingId, onSetVisibility }: { items: ProjectItem[]; sort: "recent" | "rank"; view: "list" | "gallery"; onRead: (id: string, mode?: ProjectItem["mode"]) => void; shareLoadingId: string | null; onSetVisibility: (id: string, vis: 'private' | 'public') => void; }) {
   const [visible, setVisible] = useState(10);
 
   const sorted = useMemo(() => {
@@ -983,7 +983,7 @@ function ReaderCenterVault({ items, sort, view, onRead, shareLoadingId, onSetVis
   );
 }
 
-const ReaderCard = memo(function ReaderCard({ item, onRead, view, shareLoading, onSetVisibility }: { item: ProjectItem; onRead: (id: string, mode?: ProjectItem["mode"]) => void; view: "list" | "gallery"; shareLoading: boolean; onSetVisibility: (id: string, vis: 'private'|'public') => void; }) {
+const ReaderCard = memo(function ReaderCard({ item, onRead, view, shareLoading, onSetVisibility }: { item: ProjectItem; onRead: (id: string, mode?: ProjectItem["mode"]) => void; view: "list" | "gallery"; shareLoading: boolean; onSetVisibility: (id: string, vis: 'private' | 'public') => void; }) {
   const supabase = useSupabase();
   const api = useMemo(() => createApi(supabase), [supabase]);
   const [chaptersCount, setChaptersCount] = useState<number | null>(null);
@@ -1014,7 +1014,7 @@ const ReaderCard = memo(function ReaderCard({ item, onRead, view, shareLoading, 
         setChaptersCount(typeof sum?.count === 'number' ? sum.count : null);
         const snap = (sum?.snippet || "").trim();
         setSnippet(snap ? clipWords(snap, 100) : "");
-      } catch {}
+      } catch { }
     })();
     return () => { mounted = false; };
   }, [api, item.id, visible]);
@@ -1066,7 +1066,7 @@ const ReaderCard = memo(function ReaderCard({ item, onRead, view, shareLoading, 
         <span className={`px-2 py-0.5 rounded text-xs font-bold ${rankColors[rank]}`}>{rank}</span>
       </div>
       <div className="text-xs text-text-tertiary">{labelMode(item.mode)} • {chaptersCount !== null ? `${chaptersCount} Chapters` : "Chapters —"}</div>
-      <div className="mt-6 grid grid-cols-[minmax(160px,200px)_1fr] gap-6 items-start">
+      <div className="mt-6 grid grid-cols-1 md:grid-cols-[minmax(160px,200px)_1fr] gap-4 md:gap-6 items-start">
         <div className="relative w-full pt-[133%] overflow-hidden rounded-lg border border-border-default bg-bg-primary">
           {item.coverImage ? (
             <img src={item.coverImage} alt={item.title} className="absolute inset-0 w-full h-full object-cover" />
@@ -1078,8 +1078,8 @@ const ReaderCard = memo(function ReaderCard({ item, onRead, view, shareLoading, 
         </div>
         <div className="flex flex-col gap-3 flex-1">
           <div className="text-sm text-text-secondary leading-relaxed line-clamp-2 max-h-[2.5rem]">{snippet || "No preview available."}</div>
-          <div className="flex items-center gap-3 relative mt-auto">
-            <button onClick={() => onRead(item.id, item.mode)} className="rounded-md bg-accent px-3 py-2 text-sm font-semibold text-black hover:bg-accent-hover hover:scale-105 transition-all duration-micro inline-flex items-center gap-1" title="Read Full">
+          <div className="flex flex-wrap items-center gap-2 md:gap-3 relative mt-auto">
+            <button onClick={() => onRead(item.id, item.mode)} className="rounded-md bg-accent px-3 py-2 text-xs md:text-sm font-semibold text-black hover:bg-accent-hover hover:scale-105 transition-all duration-micro inline-flex items-center gap-1 flex-shrink-0" title="Read Full">
               <BookOpen className="w-4 h-4" aria-hidden="true" />
               <span className="sr-only">Read Full</span>
             </button>
@@ -1095,7 +1095,7 @@ const ReaderCard = memo(function ReaderCard({ item, onRead, view, shareLoading, 
   );
 });
 
-function ShareMenu({ visibility, busy, onSelect }: { visibility: 'private'|'public'; busy: boolean; onSelect: (v: 'private'|'public') => void; }) {
+function ShareMenu({ visibility, busy, onSelect }: { visibility: 'private' | 'public'; busy: boolean; onSelect: (v: 'private' | 'public') => void; }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -1108,7 +1108,7 @@ function ShareMenu({ visibility, busy, onSelect }: { visibility: 'private'|'publ
   }, []);
   return (
     <div className="relative" ref={ref}>
-      <button onClick={() => setOpen(v => !v)} disabled={busy} className="rounded-md border border-border-default px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:scale-105 transition-all duration-micro inline-flex items-center gap-2" title="Share & Visibility">
+      <button onClick={() => setOpen(v => !v)} disabled={busy} className="rounded-md border border-border-default px-3 py-2 text-xs md:text-sm text-text-secondary hover:bg-bg-hover hover:scale-105 transition-all duration-micro inline-flex items-center gap-2 flex-shrink-0" title="Share & Visibility">
         {busy ? (
           <span className="inline-block w-4 h-4 border-2 border-accent/30 border-t-accent rounded-full animate-spin" aria-hidden="true" />
         ) : (
@@ -1198,6 +1198,127 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
     showLeft: true,
     showRight: true,
   });
+  const [settingsHydrated, setSettingsHydrated] = useState(false);
+
+  const DEFAULT_READER_SETTINGS = {
+    fontSize: 16,
+    lineHeight: 1.6,
+    paragraphSpacing: 10,
+    contentWidth: 'wide' as 'narrow' | 'medium' | 'wide',
+    contentPadding: 16,
+    contentMargin: 0,
+    paginate: false,
+    fontFamily: 'sans' as 'sans' | 'serif' | 'dyslexia',
+    letterSpacing: 0,
+    textAlign: 'left' as 'left' | 'justify',
+    firstLineIndent: 0,
+    hyphenate: false,
+    localTheme: 'inherit' as 'inherit' | 'light' | 'dark',
+    preset: 'none' as 'none' | 'sepia' | 'dim' | 'high',
+    contrast: 100,
+    pageColor: '',
+    showLeft: true,
+    showRight: true,
+  };
+
+  const resetReaderDefaults = () => {
+    setHideTopBar(false);
+    setOverlayOpacity(0.6);
+    setOverlayBlur(12);
+    setLeftCollapsed(false);
+    setRightCollapsed(false);
+    setReaderSettings(DEFAULT_READER_SETTINGS);
+  };
+
+  const STORAGE_KEY = 'inkverse.reader.settings.v1';
+
+  useEffect(() => {
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEY) : null;
+      if (!raw) return;
+      const data = JSON.parse(raw || '{}') || {};
+      if (typeof data.hideTopBar === 'boolean') setHideTopBar(data.hideTopBar);
+      if (typeof data.overlayOpacity === 'number') setOverlayOpacity(Math.min(1, Math.max(0, data.overlayOpacity)));
+      if (typeof data.overlayBlur === 'number') setOverlayBlur(Math.min(20, Math.max(0, data.overlayBlur)));
+      if (typeof data.leftCollapsed === 'boolean') setLeftCollapsed(data.leftCollapsed);
+      if (typeof data.rightCollapsed === 'boolean') setRightCollapsed(data.rightCollapsed);
+      if (data.readerSettings && typeof data.readerSettings === 'object') {
+        setReaderSettings((s) => ({
+          ...s,
+          ...data.readerSettings,
+        }));
+      }
+    } catch { }
+  }, []);
+
+  // Server settings hydration (overrides local if present)
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const api = createApi(supabase);
+        const prof = await api.get('/api/user/profile');
+        if (!mounted) return;
+        const srv = prof?.readerSettings as any;
+        if (srv && typeof srv === 'object') {
+          if (typeof srv.hideTopBar === 'boolean') setHideTopBar(srv.hideTopBar);
+          if (typeof srv.overlayOpacity === 'number') setOverlayOpacity(Math.min(1, Math.max(0, srv.overlayOpacity)));
+          if (typeof srv.overlayBlur === 'number') setOverlayBlur(Math.min(20, Math.max(0, srv.overlayBlur)));
+          if (typeof srv.leftCollapsed === 'boolean') setLeftCollapsed(srv.leftCollapsed);
+          if (typeof srv.rightCollapsed === 'boolean') setRightCollapsed(srv.rightCollapsed);
+          if (srv.readerSettings && typeof srv.readerSettings === 'object') {
+            setReaderSettings((s) => ({ ...s, ...srv.readerSettings }));
+          }
+          if (typeof window !== 'undefined') {
+            try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(srv)); } catch { }
+          }
+        }
+      } catch {
+        // ignore and fall back to localStorage
+      } finally {
+        if (mounted) setSettingsHydrated(true);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [supabase]);
+
+  useEffect(() => {
+    try {
+      const payload = {
+        version: 1,
+        hideTopBar,
+        overlayOpacity,
+        overlayBlur,
+        leftCollapsed,
+        rightCollapsed,
+        readerSettings,
+      };
+      if (typeof window !== 'undefined') window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    } catch { }
+  }, [hideTopBar, overlayOpacity, overlayBlur, leftCollapsed, rightCollapsed, readerSettings]);
+
+  // Debounced server sync of reader settings to user profile
+  const settingsSaveTimerRef = useRef<any>(null);
+  useEffect(() => {
+    if (!settingsHydrated) return;
+    if (settingsSaveTimerRef.current) clearTimeout(settingsSaveTimerRef.current);
+    settingsSaveTimerRef.current = setTimeout(async () => {
+      try {
+        const payload = {
+          version: 1,
+          hideTopBar,
+          overlayOpacity,
+          overlayBlur,
+          leftCollapsed,
+          rightCollapsed,
+          readerSettings,
+        };
+        const api = createApi(supabase);
+        await api.patch('/api/user/profile', { readerSettings: payload });
+      } catch { }
+    }, 500);
+    return () => { if (settingsSaveTimerRef.current) clearTimeout(settingsSaveTimerRef.current); };
+  }, [settingsHydrated, hideTopBar, overlayOpacity, overlayBlur, leftCollapsed, rightCollapsed, readerSettings, supabase]);
 
   useEffect(() => {
     const checkScreenSize = () => {
@@ -1231,8 +1352,8 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
         try {
           const bms = await api.listBookmarks(projectId);
           if (mounted) setBookmarks(bms);
-        } catch {}
-      } catch {}
+        } catch { }
+      } catch { }
     })();
     return () => { mounted = false; };
   }, [projectId, supabase]);
@@ -1246,25 +1367,46 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
         await document.exitFullscreen();
         setFs(false);
       }
-    } catch {}
+    } catch { }
   };
-  
-  const overlayBg = isDark ? `rgba(15,17,23,${overlayOpacity})` : `rgba(255,255,255,${overlayOpacity})`;
+
+  // Derive colors from settings to ensure UI chrome matches reader theme
+  const deriveColors = () => {
+    const s = readerSettings;
+    let bg = undefined as string | undefined;
+    let fg = undefined as string | undefined;
+    if (s.localTheme === 'light') { bg = '#ffffff'; fg = '#0f172a'; }
+    else if (s.localTheme === 'dark') { bg = '#0F1117'; fg = '#ffffff'; }
+    else if (s.localTheme === 'inherit') {
+      // FIX: Explicitly resolve inherit to solid colors to prevent grey transparency in fullscreen
+      if (isDark) { bg = '#0F1117'; fg = '#ffffff'; }
+      else { bg = '#ffffff'; fg = '#0f172a'; }
+    }
+
+    if (s.preset === 'sepia') { bg = '#FDF6E3'; fg = '#3F3A2C'; }
+    if (s.preset === 'dim') { bg = '#111827'; fg = '#E5E7EB'; }
+    if (s.preset === 'high') { bg = '#ffffff'; fg = '#000000'; }
+    if (s.pageColor) bg = s.pageColor;
+    return { bg, fg };
+  };
+  const { bg: themeBg, fg: themeFg } = deriveColors();
+
+  const finalOverlayBg = isDark ? `rgba(15,17,23,${overlayOpacity})` : `rgba(255,255,255,${overlayOpacity})`;
 
   return (
-    <div ref={wrapRef} className="fixed inset-0 z-30" style={{ backgroundColor: overlayBg, backdropFilter: `blur(${overlayBlur}px)`, WebkitBackdropFilter: `blur(${overlayBlur}px)` }}>
-      <div className={`h-12 md:h-12 border-b border-border-default px-3 md:px-4 flex items-center justify-between gap-2 md:gap-4 overflow-x-auto bg-transparent ${hideTopBar ? 'hidden' : ''}`}>
+    <div ref={wrapRef} className="fixed inset-0 z-30" style={{ backgroundColor: finalOverlayBg, backdropFilter: `blur(${overlayBlur}px)`, WebkitBackdropFilter: `blur(${overlayBlur}px)` }}>
+      <div className={`h-12 md:h-12 border-b border-border-default px-3 md:px-4 flex items-center justify-between gap-2 md:gap-4 overflow-x-auto transition-colors ${hideTopBar ? 'hidden' : ''}`} style={themeBg ? { backgroundColor: themeBg, color: themeFg, borderBottomColor: (readerSettings.localTheme === 'dark' || readerSettings.preset === 'dim') ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' } : { backgroundColor: 'transparent' }}>
         <div className="flex items-center gap-1 md:gap-2 flex-shrink-0">
           <div className="text-xs md:text-sm text-text-primary hidden sm:block">Mode</div>
           <div className="bg-bg-hover/60 rounded-full p-1 flex text-xs">
             <button className={`px-2 md:px-3 py-1 rounded-full transition-micro text-xs md:text-sm ${mode === 'novel' ? 'bg-accent text-black font-semibold' : 'text-text-secondary hover:text-text-primary'}`} onClick={() => setMode('novel')}>Novel</button>
             <button className={`px-2 md:px-3 py-1 rounded-full transition-micro text-xs md:text-sm ${mode === 'manhwa' ? 'bg-accent text-black font-semibold' : 'text-text-secondary hover:text-text-primary'}`} onClick={() => setMode('manhwa')}>Manhwa</button>
           </div>
-          
+
         </div>
         <div className="flex items-center gap-1 md:gap-2 flex-shrink-0">
           <button onClick={toggleFs} className="rounded-md border border-border-default px-2 md:px-3 py-1 md:py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro">{fs ? 'Exit' : 'Full'}</button>
-          <button onClick={() => setSettingsOpen(v => !v)} className="rounded-md border border-border-default px-2 md:px-3 py-1 md:py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro hidden md:block">Settings</button>
+          <button onClick={() => setSettingsOpen(v => !v)} className="rounded-md border border-border-default px-2 md:px-3 py-1 md:py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro">Settings</button>
           <button onClick={onClose} className="rounded-md bg-accent px-2 md:px-3 py-1 md:py-1.5 text-xs font-semibold text-black hover:bg-accent-hover transition-micro">Exit</button>
         </div>
       </div>
@@ -1274,21 +1416,21 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
             `grid h-full min-h-0 ` +
             (
               leftCollapsed && rightCollapsed ? 'grid-cols-[1fr]' :
-              leftCollapsed && !rightCollapsed ? 'md:grid-cols-[1fr_260px] grid-cols-[1fr]' :
-              !leftCollapsed && rightCollapsed ? 'md:grid-cols-[260px_1fr] grid-cols-[1fr]' :
-              'md:grid-cols-[260px_1fr_260px] grid-cols-[1fr]'
+                leftCollapsed && !rightCollapsed ? 'md:grid-cols-[1fr_260px] grid-cols-[1fr]' :
+                  !leftCollapsed && rightCollapsed ? 'md:grid-cols-[260px_1fr] grid-cols-[1fr]' :
+                    'md:grid-cols-[260px_1fr_260px] grid-cols-[1fr]'
             )
           }
         >
           {!leftCollapsed && (
-          <aside className="border-r border-border-default overflow-y-auto p-2 md:p-3 bg-transparent w-full md:w-auto">
-            <div className="text-xs text-text-tertiary mb-2">Chapter List</div>
-            <div className="flex flex-col gap-1">
-              {chapters.map((c) => (
-                <button key={c.id} onClick={() => { setActiveCh(c.id); setTargetCh(c.id); }} className={`text-left px-2 py-1 rounded transition-micro ${activeCh === c.id ? 'bg-bg-hover text-text-primary' : 'text-text-secondary hover:bg-bg-hover/50'}`}>{c.title}</button>
-              ))}
-            </div>
-          </aside>
+            <aside className="border-r border-border-default overflow-y-auto p-2 md:p-3 w-full md:w-auto transition-colors" style={themeBg ? { backgroundColor: themeBg, color: themeFg, borderRightColor: (readerSettings.localTheme === 'dark' || readerSettings.preset === 'dim') ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' } : { backgroundColor: 'transparent' }}>
+              <div className="text-xs text-text-tertiary mb-2">Chapter List</div>
+              <div className="flex flex-col gap-1">
+                {chapters.map((c) => (
+                  <button key={c.id} onClick={() => { setActiveCh(c.id); setTargetCh(c.id); }} className={`text-left px-2 py-1 rounded transition-micro ${activeCh === c.id ? 'bg-bg-hover text-text-primary' : 'text-text-secondary hover:bg-bg-hover/50'}`}>{c.title}</button>
+                ))}
+              </div>
+            </aside>
           )}
           <main className="overflow-hidden min-h-0 bg-transparent text-text-primary">
             <div className="h-full">
@@ -1313,134 +1455,134 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
             </div>
           </main>
           {!rightCollapsed && (
-          <aside className="border-l border-border-default overflow-hidden flex flex-col bg-transparent w-full md:w-auto">
-            <div className="flex-1 overflow-y-auto">
-              {editingBookmarkId ? (
-                <div className="p-4 space-y-3 border-b border-border-default">
-                  <h3 className="text-sm font-semibold text-text-primary">Edit Bookmark</h3>
-                  <input
-                    type="text"
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    placeholder="Bookmark name"
-                    className="w-full px-2 py-1.5 text-xs bg-bg-primary border border-border-default rounded text-text-primary placeholder-text-tertiary focus:outline-none focus:border-accent"
-                  />
-                  <textarea
-                    value={editDescription}
-                    onChange={(e) => setEditDescription(e.target.value)}
-                    placeholder="Description (optional)"
-                    className="w-full px-2 py-1.5 text-xs bg-bg-primary border border-border-default rounded text-text-primary placeholder-text-tertiary focus:outline-none focus:border-accent resize-none h-20"
-                  />
-                  <div className="flex gap-2">
-                    <button
-                      onClick={async () => {
-                        setSavingBookmarkId(editingBookmarkId);
-                        try {
-                          const api = createApi(supabase);
-                          const result = await api.updateBookmark(projectId, editingBookmarkId, editName, editDescription);
-                          const updated = bookmarks.map((b) =>
-                            b.id === editingBookmarkId ? { ...b, name: editName, description: editDescription, ...result } : b
-                          );
-                          setBookmarks(updated);
-                          setEditingBookmarkId(null);
-                        } catch (e) {
-                          console.error('Update error:', e);
-                        } finally {
-                          setSavingBookmarkId(null);
-                        }
-                      }}
-                      disabled={savingBookmarkId === editingBookmarkId}
-                      className="flex-1 px-2 py-1 text-xs bg-accent text-white rounded hover:bg-accent/90 transition-micro disabled:opacity-70 flex items-center justify-center gap-1"
-                    >
-                      {savingBookmarkId === editingBookmarkId ? (
-                        <>
-                          <svg className="w-3 h-3 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="none" opacity="0.3" />
-                            <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                          </svg>
-                          Saving…
-                        </>
-                      ) : (
-                        'Save'
-                      )}
-                    </button>
-                    <button
-                      onClick={() => setEditingBookmarkId(null)}
-                      className="flex-1 px-2 py-1 text-xs bg-bg-hover text-text-secondary rounded hover:bg-border-default transition-micro"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-1 p-2">
-                  {bookmarks.length === 0 ? (
-                    <div className="text-xs text-text-tertiary p-3 text-center">No bookmarks yet</div>
-                  ) : (
-                    bookmarks.map((bm) => (
-                      <div key={bm.id} className="flex items-center gap-2 p-2 rounded hover:bg-bg-hover group transition-micro cursor-pointer" onClick={() => {
-                        // Update UI bar immediately
-                        setProgress(bm.progress);
-                        // Ask ReaderView to programmatically scroll to this percent
-                        setTargetScrollPct((prev) => (prev === bm.progress ? bm.progress + 0.0001 : bm.progress));
-                      }}>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-xs font-medium text-text-primary truncate">{bm.name}</div>
-                          <div className="text-xs text-text-tertiary">{bm.progress}% progress</div>
-                        </div>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingBookmarkId(bm.id);
-                            setEditName(bm.name);
-                            setEditDescription(bm.description || '');
-                          }}
-                          className="opacity-100 md:opacity-0 md:group-hover:opacity-100 p-1 text-text-secondary hover:text-accent transition-micro"
-                          title="Edit"
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                          </svg>
-                        </button>
-                        <button
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            setDeletingBookmarkId(bm.id);
-                            try {
-                              const api = createApi(supabase);
-                              await api.deleteBookmark(projectId, bm.id);
-                              setBookmarks(bookmarks.filter((b) => b.id !== bm.id));
-                            } catch (e) {
-                              console.error('Delete error:', e);
-                            } finally {
-                              setDeletingBookmarkId(null);
-                            }
-                          }}
-                          disabled={deletingBookmarkId === bm.id}
-                          className="opacity-100 md:opacity-0 md:group-hover:opacity-100 p-1 text-text-secondary hover:text-red-500 transition-micro disabled:opacity-50"
-                          title="Delete"
-                        >
-                          {deletingBookmarkId === bm.id ? (
-                            <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <aside className="border-l border-border-default overflow-hidden flex flex-col w-full md:w-auto transition-colors" style={themeBg ? { backgroundColor: themeBg, color: themeFg, borderLeftColor: (readerSettings.localTheme === 'dark' || readerSettings.preset === 'dim') ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' } : { backgroundColor: 'transparent' }}>
+              <div className="flex-1 overflow-y-auto">
+                {editingBookmarkId ? (
+                  <div className="p-4 space-y-3 border-b border-border-default">
+                    <h3 className="text-sm font-semibold text-text-primary">Edit Bookmark</h3>
+                    <input
+                      type="text"
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      placeholder="Bookmark name"
+                      className="w-full px-2 py-1.5 text-xs bg-bg-primary border border-border-default rounded text-text-primary placeholder-text-tertiary focus:outline-none focus:border-accent"
+                    />
+                    <textarea
+                      value={editDescription}
+                      onChange={(e) => setEditDescription(e.target.value)}
+                      placeholder="Description (optional)"
+                      className="w-full px-2 py-1.5 text-xs bg-bg-primary border border-border-default rounded text-text-primary placeholder-text-tertiary focus:outline-none focus:border-accent resize-none h-20"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={async () => {
+                          setSavingBookmarkId(editingBookmarkId);
+                          try {
+                            const api = createApi(supabase);
+                            const result = await api.updateBookmark(projectId, editingBookmarkId, editName, editDescription);
+                            const updated = bookmarks.map((b) =>
+                              b.id === editingBookmarkId ? { ...b, name: editName, description: editDescription, ...result } : b
+                            );
+                            setBookmarks(updated);
+                            setEditingBookmarkId(null);
+                          } catch (e) {
+                            console.error('Update error:', e);
+                          } finally {
+                            setSavingBookmarkId(null);
+                          }
+                        }}
+                        disabled={savingBookmarkId === editingBookmarkId}
+                        className="flex-1 px-2 py-1 text-xs bg-accent text-white rounded hover:bg-accent/90 transition-micro disabled:opacity-70 flex items-center justify-center gap-1"
+                      >
+                        {savingBookmarkId === editingBookmarkId ? (
+                          <>
+                            <svg className="w-3 h-3 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="none" opacity="0.3" />
                               <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                             </svg>
-                          ) : (
+                            Saving…
+                          </>
+                        ) : (
+                          'Save'
+                        )}
+                      </button>
+                      <button
+                        onClick={() => setEditingBookmarkId(null)}
+                        className="flex-1 px-2 py-1 text-xs bg-bg-hover text-text-secondary rounded hover:bg-border-default transition-micro"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-1 p-2">
+                    {bookmarks.length === 0 ? (
+                      <div className="text-xs text-text-tertiary p-3 text-center">No bookmarks yet</div>
+                    ) : (
+                      bookmarks.map((bm) => (
+                        <div key={bm.id} className="flex items-center gap-2 p-2 rounded hover:bg-bg-hover group transition-micro cursor-pointer" onClick={() => {
+                          // Update UI bar immediately
+                          setProgress(bm.progress);
+                          // Ask ReaderView to programmatically scroll to this percent
+                          setTargetScrollPct((prev) => (prev === bm.progress ? bm.progress + 0.0001 : bm.progress));
+                        }}>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-medium text-text-primary truncate">{bm.name}</div>
+                            <div className="text-xs text-text-tertiary">{bm.progress}% progress</div>
+                          </div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingBookmarkId(bm.id);
+                              setEditName(bm.name);
+                              setEditDescription(bm.description || '');
+                            }}
+                            className="opacity-100 md:opacity-0 md:group-hover:opacity-100 p-1 text-text-secondary hover:text-accent transition-micro"
+                            title="Edit"
+                          >
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                             </svg>
-                          )}
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-          </aside>
+                          </button>
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              setDeletingBookmarkId(bm.id);
+                              try {
+                                const api = createApi(supabase);
+                                await api.deleteBookmark(projectId, bm.id);
+                                setBookmarks(bookmarks.filter((b) => b.id !== bm.id));
+                              } catch (e) {
+                                console.error('Delete error:', e);
+                              } finally {
+                                setDeletingBookmarkId(null);
+                              }
+                            }}
+                            disabled={deletingBookmarkId === bm.id}
+                            className="opacity-100 md:opacity-0 md:group-hover:opacity-100 p-1 text-text-secondary hover:text-red-500 transition-micro disabled:opacity-50"
+                            title="Delete"
+                          >
+                            {deletingBookmarkId === bm.id ? (
+                              <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="none" opacity="0.3" />
+                                <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                              </svg>
+                            ) : (
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                            )}
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            </aside>
           )}
         </div>
-        <div className="h-auto md:h-14 border-t border-border-default px-3 md:px-4 py-2 md:py-0 flex flex-col md:flex-row items-start md:items-center gap-2 md:gap-3 bg-transparent">
+        <div className="h-auto md:h-14 border-t border-border-default px-3 md:px-4 py-2 md:py-0 flex flex-col md:flex-row items-start md:items-center gap-2 md:gap-3 transition-colors" style={themeBg ? { backgroundColor: themeBg, color: themeFg, borderTopColor: (readerSettings.localTheme === 'dark' || readerSettings.preset === 'dim') ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' } : { backgroundColor: 'transparent' }}>
           <div className="flex items-center gap-2 w-full md:flex-1">
             <div className="text-xs text-text-tertiary flex-shrink-0">Progress</div>
             <div className="flex-1 h-2 bg-bg-hover rounded-full overflow-hidden">
@@ -1449,32 +1591,32 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
             <div className="text-xs text-text-secondary w-10 text-right flex-shrink-0">{progress}%</div>
           </div>
           <div className="flex items-center gap-1 md:gap-2 w-full md:w-auto">
-          <button
-            className="rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro disabled:opacity-50"
-            onClick={() => {
-              if (mode === 'manhwa') {
-                if (panelIdx > 0) setTargetPanelIdx(panelIdx - 1);
-              } else {
-                if (!activeCh) return;
-                const idx = chapters.findIndex(c => c.id === activeCh);
-                if (idx > 0) { const prevId = chapters[idx - 1].id; setTargetCh(prevId); setActiveCh(prevId); }
-              }
-            }}
-            disabled={mode === 'manhwa' ? panelIdx <= 0 : (chapters.length === 0 || chapters.findIndex(c => c.id === activeCh) <= 0)}
-          >Prev</button>
-          <button
-            className="rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro disabled:opacity-50"
-            onClick={() => {
-              if (mode === 'manhwa') {
-                if (panelIdx < Math.max(0, panelTotal - 1)) setTargetPanelIdx(panelIdx + 1);
-              } else {
-                if (!activeCh) return;
-                const idx = chapters.findIndex(c => c.id === activeCh);
-                if (idx >= 0 && idx < chapters.length - 1) { const nextId = chapters[idx + 1].id; setTargetCh(nextId); setActiveCh(nextId); }
-              }
-            }}
-            disabled={mode === 'manhwa' ? (panelTotal <= 0 || panelIdx >= panelTotal - 1) : (chapters.length === 0 || chapters.findIndex(c => c.id === activeCh) >= chapters.length - 1)}
-          >Next</button>
+            <button
+              className="rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro disabled:opacity-50"
+              onClick={() => {
+                if (mode === 'manhwa') {
+                  if (panelIdx > 0) setTargetPanelIdx(panelIdx - 1);
+                } else {
+                  if (!activeCh) return;
+                  const idx = chapters.findIndex(c => c.id === activeCh);
+                  if (idx > 0) { const prevId = chapters[idx - 1].id; setTargetCh(prevId); setActiveCh(prevId); }
+                }
+              }}
+              disabled={mode === 'manhwa' ? panelIdx <= 0 : (chapters.length === 0 || chapters.findIndex(c => c.id === activeCh) <= 0)}
+            >Prev</button>
+            <button
+              className="rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro disabled:opacity-50"
+              onClick={() => {
+                if (mode === 'manhwa') {
+                  if (panelIdx < Math.max(0, panelTotal - 1)) setTargetPanelIdx(panelIdx + 1);
+                } else {
+                  if (!activeCh) return;
+                  const idx = chapters.findIndex(c => c.id === activeCh);
+                  if (idx >= 0 && idx < chapters.length - 1) { const nextId = chapters[idx + 1].id; setTargetCh(nextId); setActiveCh(nextId); }
+                }
+              }}
+              disabled={mode === 'manhwa' ? (panelTotal <= 0 || panelIdx >= panelTotal - 1) : (chapters.length === 0 || chapters.findIndex(c => c.id === activeCh) >= chapters.length - 1)}
+            >Next</button>
           </div>
           <button
             className="rounded-md border border-accent bg-accent/20 px-2 md:px-3 py-1 md:py-1.5 text-xs text-accent hover:bg-accent/30 transition-micro disabled:opacity-50 w-full md:w-auto"
@@ -1498,7 +1640,10 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
       </div>
       {settingsOpen && (
         <div className={`fixed ${hideTopBar ? 'top-0' : 'top-12'} right-0 bottom-0 w-80 bg-bg-elevated border-l border-border-default p-4 overflow-y-auto z-40`}>
-          <div className="text-sm font-semibold text-text-primary mb-3">Reader Settings</div>
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-sm font-semibold text-text-primary">Reader Settings</div>
+            <button onClick={resetReaderDefaults} className="text-xs text-text-secondary hover:text-text-primary border border-border-default px-2 py-1 rounded">Reset</button>
+          </div>
           <div className="space-y-4 text-xs">
             <div>
               <div className="text-text-tertiary font-semibold mb-2">Display & Layout</div>
@@ -1575,7 +1720,7 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
                 <option value="high">High Contrast</option>
               </select>
               <label className="block mt-3 mb-1 text-text-secondary">Page color</label>
-              <input type="color" value={readerSettings.pageColor || '#000000'} onChange={(e) => setReaderSettings(s => ({ ...s, pageColor: e.target.value }))} className="w-full h-8 p-0 border border-border-default rounded" />
+              <input type="color" value={readerSettings.pageColor || (isDark ? '#000000' : '#ffffff')} onChange={(e) => setReaderSettings(s => ({ ...s, pageColor: e.target.value }))} className="w-full h-8 p-0 border border-border-default rounded" />
               <label className="block mt-3 mb-1 text-text-secondary">Reader contrast: {readerSettings.contrast}%</label>
               <input type="range" min={80} max={140} step={1} value={readerSettings.contrast} onChange={(e) => setReaderSettings(s => ({ ...s, contrast: Number(e.target.value) }))} className="w-full" />
             </div>

@@ -2,11 +2,14 @@
 
 export const dynamic = "force-dynamic";
 
+import type React from "react";
 import { useEffect, useMemo, useState, useRef, memo } from "react";
 import { useRouter } from "next/navigation";
 import { useSupabase } from "@/components/providers/SupabaseProvider";
 import { createApi } from "@/lib/api";
 import { BookOpen } from "lucide-react";
+import { useTheme } from "@/components/providers/ThemeProvider";
+import type { ReaderSettings } from "@/components/ReaderView";
 
 type PublicProject = {
   id: string;
@@ -67,14 +70,14 @@ export default function ExplorePage() {
         let allItems: PublicProject[] = [];
         let page = 0;
         let hasMore = true;
-        
+
         while (hasMore) {
           const res = await api.getPublicProjects(page, 100);
           allItems = allItems.concat(res.items as PublicProject[]);
           hasMore = allItems.length < (res.total || 0);
           page++;
         }
-        
+
         if (mounted) {
           setItems(allItems);
         }
@@ -93,7 +96,7 @@ export default function ExplorePage() {
 
   const filtered = useMemo(() => {
     let result = items;
-    
+
     // Search filter
     if (q.trim()) {
       const query = q.toLowerCase();
@@ -101,17 +104,17 @@ export default function ExplorePage() {
         p.title.toLowerCase().includes(query) || (p.description || "").toLowerCase().includes(query)
       );
     }
-    
+
     // Mode filter
     if (modeFilter !== 'all') {
       result = result.filter(p => p.mode === modeFilter);
     }
-    
+
     // Rank filter
     if (rankFilter !== 'all') {
       result = result.filter(p => rankForProject(p.id) === rankFilter);
     }
-    
+
     // Time filter
     if (timeFilter !== 'all') {
       const now = Date.now();
@@ -121,7 +124,7 @@ export default function ExplorePage() {
         return (now - t) <= maxAge * 24 * 60 * 60 * 1000;
       });
     }
-    
+
     // Genre filter
     if (genreFilters.size > 0) {
       result = result.filter(p => {
@@ -129,7 +132,7 @@ export default function ExplorePage() {
         return projectGenres.some(g => genreFilters.has(g));
       });
     }
-    
+
     return result;
   }, [items, q, modeFilter, rankFilter, timeFilter, genreFilters]);
 
@@ -180,10 +183,10 @@ export default function ExplorePage() {
       <main className="mx-auto max-w-7xl px-4 sm:px-6 py-4 sm:py-6 flex flex-col lg:flex-row gap-4 sm:gap-6 h-auto lg:h-[calc(100vh-6rem)]">
         {/* Filters Sidebar */}
         {(filtersOpen || isLargeScreen) && (
-          <LeftFilters 
-            modeFilter={modeFilter} 
-            onModeFilter={setModeFilter} 
-            rankFilter={rankFilter} 
+          <LeftFilters
+            modeFilter={modeFilter}
+            onModeFilter={setModeFilter}
+            rankFilter={rankFilter}
             onRankFilter={setRankFilter}
             timeFilter={timeFilter}
             onTimeFilter={setTimeFilter}
@@ -194,12 +197,12 @@ export default function ExplorePage() {
         )}
 
         {/* Center - Story Vault */}
-        <PublicVault 
-          items={filtered} 
-          sort={sort} 
-          view={view} 
-          loading={loading} 
-          onRead={(slug, mode) => setReaderOpen({ slug, mode: mode === "manhwa" ? "manhwa" : "novel" })} 
+        <PublicVault
+          items={filtered}
+          sort={sort}
+          view={view}
+          loading={loading}
+          onRead={(slug, mode) => setReaderOpen({ slug, mode: mode === "manhwa" ? "manhwa" : "novel" })}
         />
 
         {/* Controls Sidebar */}
@@ -248,7 +251,7 @@ function LeftFilters({ modeFilter, onModeFilter, rankFilter, onRankFilter, timeF
   return (
     <aside className="w-full lg:basis-1/5 bg-bg-elevated border border-border-default rounded-xl p-4 sm:p-6 h-fit space-y-4 shadow-elevation overflow-y-auto max-h-none lg:max-h-[calc(100vh-8rem)]">
       <div className="text-sm font-semibold tracking-elegant">FILTERS</div>
-      
+
       <div>
         <div className="text-xs text-text-tertiary mb-2">Mode</div>
         <select value={modeFilter} onChange={(e) => onModeFilter(e.target.value as any)} className="w-full rounded-md bg-bg-primary border border-border-default px-3 py-2 text-sm text-text-primary focus:border-accent transition-colors duration-micro">
@@ -490,6 +493,60 @@ function PublicReaderOverlay({ slug, initialMode, onClose }: { slug: string; ini
   const [fs, setFs] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const { isDark } = useTheme();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [hideTopBar, setHideTopBar] = useState(false);
+  const [overlayOpacity, setOverlayOpacity] = useState(0.6);
+  const [overlayBlur, setOverlayBlur] = useState(12);
+  const [readerSettings, setReaderSettings] = useState<ReaderSettings>({
+    fontSize: 16,
+    lineHeight: 1.6,
+    paragraphSpacing: 10,
+    contentWidth: 'wide',
+    contentPadding: 16,
+    contentMargin: 0,
+    paginate: false,
+    fontFamily: 'sans',
+    letterSpacing: 0,
+    textAlign: 'left',
+    firstLineIndent: 0,
+    hyphenate: false,
+    localTheme: 'inherit',
+    preset: 'none',
+    contrast: 100,
+    pageColor: '',
+  });
+
+  const STORAGE_KEY = 'inkverse.reader.settings.v1';
+  const [settingsHydrated, setSettingsHydrated] = useState(false);
+  const serverSettingsRef = useRef<any>(null);
+
+  const DEFAULT_READER_SETTINGS: ReaderSettings = {
+    fontSize: 16,
+    lineHeight: 1.6,
+    paragraphSpacing: 10,
+    contentWidth: 'wide',
+    contentPadding: 16,
+    contentMargin: 0,
+    paginate: false,
+    fontFamily: 'sans',
+    letterSpacing: 0,
+    textAlign: 'left',
+    firstLineIndent: 0,
+    hyphenate: false,
+    localTheme: 'inherit',
+    preset: 'none',
+    contrast: 100,
+    pageColor: '',
+  };
+
+  const resetReaderDefaults = () => {
+    setHideTopBar(false);
+    setOverlayOpacity(0.6);
+    setOverlayBlur(12);
+    setSidebarOpen(true);
+    setReaderSettings(DEFAULT_READER_SETTINGS);
+  };
 
   const toggleFs = async () => {
     try {
@@ -537,9 +594,106 @@ function PublicReaderOverlay({ slug, initialMode, onClose }: { slug: string; ini
     return () => { mounted = false; };
   }, [slug, api]);
 
+  // LocalStorage hydration (fast)
+  useEffect(() => {
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEY) : null;
+      if (!raw) return;
+      const data = JSON.parse(raw || '{}') || {};
+      if (typeof data.hideTopBar === 'boolean') setHideTopBar(data.hideTopBar);
+      if (typeof data.overlayOpacity === 'number') setOverlayOpacity(Math.min(1, Math.max(0, data.overlayOpacity)));
+      if (typeof data.overlayBlur === 'number') setOverlayBlur(Math.min(20, Math.max(0, data.overlayBlur)));
+      if (typeof data.sidebarOpen === 'boolean') setSidebarOpen(data.sidebarOpen);
+      if (data.readerSettings && typeof data.readerSettings === 'object') {
+        setReaderSettings((s) => ({ ...s, ...data.readerSettings }));
+      }
+    } catch { }
+  }, []);
+
+  // Server hydration (authoritative)
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const prof = await api.get('/api/user/profile');
+        if (!mounted) return;
+        const srv = (prof as any)?.readerSettings;
+        if (srv && typeof srv === 'object') {
+          serverSettingsRef.current = srv;
+          if (typeof srv.hideTopBar === 'boolean') setHideTopBar(srv.hideTopBar);
+          if (typeof srv.overlayOpacity === 'number') setOverlayOpacity(Math.min(1, Math.max(0, srv.overlayOpacity)));
+          if (typeof srv.overlayBlur === 'number') setOverlayBlur(Math.min(20, Math.max(0, srv.overlayBlur)));
+          if (typeof srv.sidebarOpen === 'boolean') setSidebarOpen(srv.sidebarOpen);
+          if (srv.readerSettings && typeof srv.readerSettings === 'object') {
+            setReaderSettings((s) => ({ ...s, ...srv.readerSettings }));
+          }
+          if (typeof window !== 'undefined') {
+            try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(srv)); } catch { }
+          }
+        }
+      } catch { }
+      finally { if (mounted) setSettingsHydrated(true); }
+    })();
+    return () => { mounted = false; };
+  }, [api]);
+
+  // Debounced persist to backend (preserve unknown keys)
+  const saveTimerRef = useRef<any>(null);
+  useEffect(() => {
+    if (!settingsHydrated) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    const payload = {
+      ...(serverSettingsRef.current || {}),
+      version: 1,
+      hideTopBar,
+      overlayOpacity,
+      overlayBlur,
+      sidebarOpen,
+      readerSettings,
+    } as any;
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        await api.patch('/api/user/profile', { readerSettings: payload });
+        serverSettingsRef.current = payload;
+        if (typeof window !== 'undefined') {
+          try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload)); } catch { }
+        }
+      } catch { }
+    }, 500);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+  }, [settingsHydrated, hideTopBar, overlayOpacity, overlayBlur, sidebarOpen, readerSettings, api]);
+  // Derive colors from settings to ensure UI chrome matches reader theme
+  const deriveColors = () => {
+    const s = readerSettings;
+    let bg = undefined as string | undefined;
+    let fg = undefined as string | undefined;
+    if (s.localTheme === 'light') { bg = '#ffffff'; fg = '#0f172a'; }
+    else if (s.localTheme === 'dark') { bg = '#0F1117'; fg = '#ffffff'; }
+    else if (s.localTheme === 'inherit') {
+      // FIX: Explicitly resolve inherit to solid colors to prevent grey transparency in fullscreen
+      if (isDark) { bg = '#0F1117'; fg = '#ffffff'; }
+      else { bg = '#ffffff'; fg = '#0f172a'; }
+    }
+
+    if (s.preset === 'sepia') { bg = '#FDF6E3'; fg = '#3F3A2C'; }
+    if (s.preset === 'dim') { bg = '#111827'; fg = '#E5E7EB'; }
+    if (s.preset === 'high') { bg = '#ffffff'; fg = '#000000'; }
+    if (s.pageColor) bg = s.pageColor;
+    return { bg, fg };
+  };
+  const { bg: themeBg, fg: themeFg } = deriveColors();
+
+  // If no specific reader theme/bg is active, fall back to the overlay (backdrop) style
+  // Otherwise use the solid theme background for the chrome to look "native" to the reader
+  const chromeStyle = themeBg ? { backgroundColor: themeBg, color: themeFg, borderColor: 'transparent' } : {};
+  // Overlay backdrop (glassmorphism) is only used if there isn't a solid page color or if we are not in full screen (optional design choice, here we keep backdrop for the "pad" areas but chrome needs to match)
+  // Actually, to match the "white like central part" request, we should make the sidebar/topbar use the themeBg.
+
+  const finalOverlayBg = isDark ? `rgba(15,17,23,${overlayOpacity})` : `rgba(255,255,255,${overlayOpacity})`;
+
   return (
-    <div ref={wrapRef} className="fixed inset-0 z-30 bg-white/95 dark:bg-[#0F1117]/95 backdrop-blur-soft">
-      <div className="h-12 border-b border-border-default px-4 flex items-center justify-between bg-bg-primary">
+    <div ref={wrapRef} className="fixed inset-0 z-30" style={{ backgroundColor: finalOverlayBg, backdropFilter: `blur(${overlayBlur}px)`, WebkitBackdropFilter: `blur(${overlayBlur}px)` }}>
+      <div className={`h-12 border-b border-border-default px-4 flex items-center justify-between transition-colors ${hideTopBar ? 'hidden' : ''}`} style={themeBg ? { backgroundColor: themeBg, color: themeFg, borderBottomColor: (readerSettings.localTheme === 'dark' || readerSettings.preset === 'dim') ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' } : { backgroundColor: 'transparent' }}>
         <div className="flex items-center gap-4">
           <button
             onClick={onClose}
@@ -567,6 +721,12 @@ function PublicReaderOverlay({ slug, initialMode, onClose }: { slug: string; ini
             <option value="manhwa">Manhwa</option>
           </select>
           <button
+            onClick={() => setSettingsOpen(v => !v)}
+            className="rounded-md border border-border-default px-3 py-1 text-sm text-text-secondary hover:bg-bg-hover transition-colors"
+          >
+            Settings
+          </button>
+          <button
             onClick={toggleFs}
             className="text-text-secondary hover:text-text-primary transition-colors p-1"
             title={fs ? "Exit fullscreen" : "Enter fullscreen"}
@@ -587,7 +747,7 @@ function PublicReaderOverlay({ slug, initialMode, onClose }: { slug: string; ini
       <div className="flex h-[calc(100vh-3rem)]">
         {/* Left sidebar - Chapters (Collapsible) */}
         {sidebarOpen && (
-          <div className="w-full sm:w-64 border-r border-border-default bg-bg-elevated overflow-y-auto">
+          <div className="w-full sm:w-64 border-r border-border-default overflow-y-auto transition-colors" style={themeBg ? { backgroundColor: themeBg, color: themeFg, borderRightColor: (readerSettings.localTheme === 'dark' || readerSettings.preset === 'dim') ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' } : { backgroundColor: 'transparent' }}>
             {chaptersLoading ? (
               <div className="flex items-center justify-center h-full">
                 <div className="flex flex-col items-center gap-3">
@@ -601,11 +761,10 @@ function PublicReaderOverlay({ slug, initialMode, onClose }: { slug: string; ini
                   <button
                     key={ch.id}
                     onClick={() => setActiveCh(ch.id)}
-                    className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
-                      activeCh === ch.id
-                        ? 'bg-accent text-black font-semibold'
-                        : 'text-text-secondary hover:bg-bg-hover'
-                    }`}
+                    className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${activeCh === ch.id
+                      ? 'bg-accent text-black font-semibold'
+                      : 'text-text-secondary hover:bg-bg-hover'
+                      }`}
                   >
                     {ch.title}
                   </button>
@@ -616,9 +775,9 @@ function PublicReaderOverlay({ slug, initialMode, onClose }: { slug: string; ini
         )}
 
         {/* Main content */}
-        <div className="flex-1 overflow-y-auto bg-bg-primary text-text-primary">
+        <div className="flex-1 overflow-y-auto bg-transparent text-text-primary">
           {activeCh ? (
-            <ChapterContent slug={slug} chapterId={activeCh} mode={mode} />
+            <ChapterContent slug={slug} chapterId={activeCh} mode={mode} readerSettings={readerSettings} />
           ) : (
             <div className="flex items-center justify-center h-full text-text-secondary">
               No chapters available
@@ -626,11 +785,96 @@ function PublicReaderOverlay({ slug, initialMode, onClose }: { slug: string; ini
           )}
         </div>
       </div>
+      {settingsOpen && (
+        <div className={`fixed ${hideTopBar ? 'top-0' : 'top-12'} right-0 bottom-0 w-80 bg-bg-elevated border-l border-border-default p-4 overflow-y-auto z-40`}>
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-sm font-semibold text-text-primary">Reader Settings</div>
+            <button onClick={resetReaderDefaults} className="text-xs text-text-secondary hover:text-text-primary border border-border-default px-2 py-1 rounded">Reset</button>
+          </div>
+          <div className="space-y-4 text-xs">
+            <div>
+              <div className="text-text-tertiary font-semibold mb-2">Display & Layout</div>
+              <label className="block mb-1 text-text-secondary">Font size: {readerSettings.fontSize}px</label>
+              <input type="range" min={12} max={28} step={1} value={readerSettings.fontSize} onChange={(e) => setReaderSettings(s => ({ ...s, fontSize: Number(e.target.value) }))} className="w-full" />
+              <label className="block mt-3 mb-1 text-text-secondary">Line height: {readerSettings.lineHeight.toFixed(1)}</label>
+              <input type="range" min={1.2} max={2} step={0.1} value={readerSettings.lineHeight} onChange={(e) => setReaderSettings(s => ({ ...s, lineHeight: Number(e.target.value) }))} className="w-full" />
+              <label className="block mt-3 mb-1 text-text-secondary">Paragraph spacing: {readerSettings.paragraphSpacing}px</label>
+              <input type="range" min={0} max={36} step={1} value={readerSettings.paragraphSpacing} onChange={(e) => setReaderSettings(s => ({ ...s, paragraphSpacing: Number(e.target.value) }))} className="w-full" />
+              <label className="block mt-3 mb-1 text-text-secondary">Content width</label>
+              <select className="w-full bg-bg-primary border border-border-default rounded px-2 py-1 text-text-primary" value={readerSettings.contentWidth} onChange={(e) => setReaderSettings(s => ({ ...s, contentWidth: e.target.value as any }))}>
+                <option value="narrow">Narrow</option>
+                <option value="medium">Medium</option>
+                <option value="wide">Wide</option>
+              </select>
+              <label className="block mt-3 mb-1 text-text-secondary">Content padding: {readerSettings.contentPadding}px</label>
+              <input type="range" min={0} max={48} step={2} value={readerSettings.contentPadding} onChange={(e) => setReaderSettings(s => ({ ...s, contentPadding: Number(e.target.value) }))} className="w-full" />
+              <label className="block mt-3 mb-1 text-text-secondary">Content margin: {readerSettings.contentMargin}px</label>
+              <input type="range" min={0} max={64} step={2} value={readerSettings.contentMargin} onChange={(e) => setReaderSettings(s => ({ ...s, contentMargin: Number(e.target.value) }))} className="w-full" />
+              <div className="mt-3 flex items-center gap-2">
+                <input id="hideTopBar" type="checkbox" checked={hideTopBar} onChange={(e) => setHideTopBar(e.target.checked)} />
+                <label htmlFor="hideTopBar" className="text-text-secondary">Hide top bar</label>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <input id="showCh" type="checkbox" checked={sidebarOpen} onChange={(e) => setSidebarOpen(e.target.checked)} />
+                <label htmlFor="showCh" className="text-text-secondary">Show chapters sidebar</label>
+              </div>
+              <label className="block mt-3 mb-1 text-text-secondary">Overlay opacity: {Math.round(overlayOpacity * 100)}%</label>
+              <input type="range" min={0} max={1} step={0.01} value={overlayOpacity} onChange={(e) => setOverlayOpacity(Number(e.target.value))} className="w-full" />
+              <label className="block mt-3 mb-1 text-text-secondary">Overlay blur: {overlayBlur}px</label>
+              <input type="range" min={0} max={20} step={1} value={overlayBlur} onChange={(e) => setOverlayBlur(Number(e.target.value))} className="w-full" />
+            </div>
+
+            <div>
+              <div className="text-text-tertiary font-semibold mb-2">Typography</div>
+              <label className="block mb-1 text-text-secondary">Font family</label>
+              <select className="w-full bg-bg-primary border border-border-default rounded px-2 py-1 text-text-primary" value={readerSettings.fontFamily} onChange={(e) => setReaderSettings(s => ({ ...s, fontFamily: e.target.value as any }))}>
+                <option value="sans">Sans</option>
+                <option value="serif">Serif</option>
+                <option value="dyslexia">Dyslexia-friendly</option>
+              </select>
+              <label className="block mt-3 mb-1 text-text-secondary">Letter spacing: {readerSettings.letterSpacing}px</label>
+              <input type="range" min={-1} max={2} step={0.1} value={readerSettings.letterSpacing} onChange={(e) => setReaderSettings(s => ({ ...s, letterSpacing: Number(e.target.value) }))} className="w-full" />
+              <label className="block mt-3 mb-1 text-text-secondary">Justification</label>
+              <select className="w-full bg-bg-primary border border-border-default rounded px-2 py-1 text-text-primary" value={readerSettings.textAlign} onChange={(e) => setReaderSettings(s => ({ ...s, textAlign: e.target.value as any }))}>
+                <option value="left">Left</option>
+                <option value="justify">Justify</option>
+              </select>
+              <label className="block mt-3 mb-1 text-text-secondary">First-line indent: {readerSettings.firstLineIndent}px</label>
+              <input type="range" min={0} max={64} step={2} value={readerSettings.firstLineIndent} onChange={(e) => setReaderSettings(s => ({ ...s, firstLineIndent: Number(e.target.value) }))} className="w-full" />
+              <div className="mt-3 flex items-center gap-2">
+                <input id="hyphenate" type="checkbox" checked={readerSettings.hyphenate} onChange={(e) => setReaderSettings(s => ({ ...s, hyphenate: e.target.checked }))} />
+                <label htmlFor="hyphenate" className="text-text-secondary">Hyphenation</label>
+              </div>
+            </div>
+
+            <div>
+              <div className="text-text-tertiary font-semibold mb-2">Theme & Colors</div>
+              <label className="block mb-1 text-text-secondary">Local theme</label>
+              <select className="w-full bg-bg-primary border border-border-default rounded px-2 py-1 text-text-primary" value={readerSettings.localTheme} onChange={(e) => setReaderSettings(s => ({ ...s, localTheme: e.target.value as any }))}>
+                <option value="inherit">Inherit app</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+              <label className="block mt-3 mb-1 text-text-secondary">Preset</label>
+              <select className="w-full bg-bg-primary border border-border-default rounded px-2 py-1 text-text-primary" value={readerSettings.preset} onChange={(e) => setReaderSettings(s => ({ ...s, preset: e.target.value as any }))}>
+                <option value="none">None</option>
+                <option value="sepia">Sepia</option>
+                <option value="dim">Dim</option>
+                <option value="high">High Contrast</option>
+              </select>
+              <label className="block mt-3 mb-1 text-text-secondary">Page color</label>
+              <input type="color" value={readerSettings.pageColor || (isDark ? '#000000' : '#ffffff')} onChange={(e) => setReaderSettings(s => ({ ...s, pageColor: e.target.value }))} className="w-full h-8 p-0 border border-border-default rounded" />
+              <label className="block mt-3 mb-1 text-text-secondary">Reader contrast: {readerSettings.contrast}%</label>
+              <input type="range" min={80} max={140} step={1} value={readerSettings.contrast} onChange={(e) => setReaderSettings(s => ({ ...s, contrast: Number(e.target.value) }))} className="w-full" />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function ChapterContent({ slug, chapterId, mode }: { slug: string; chapterId: string; mode: "novel" | "manhwa"; }) {
+function ChapterContent({ slug, chapterId, mode, readerSettings }: { slug: string; chapterId: string; mode: "novel" | "manhwa"; readerSettings: ReaderSettings; }) {
   const supabase = useSupabase();
   const api = useMemo(() => createApi(supabase), [supabase]);
   const [chapter, setChapter] = useState<any>(null);
@@ -645,14 +889,14 @@ function ChapterContent({ slug, chapterId, mode }: { slug: string; chapterId: st
         let allChapters: any[] = [];
         let page = 0;
         let hasMore = true;
-        
+
         while (hasMore) {
           const res = await api.getPublicChapters(slug, page, 100);
           allChapters = allChapters.concat(res.items as any[]);
           hasMore = allChapters.length < (res.total || 0);
           page++;
         }
-        
+
         const found = allChapters.find(c => c.id === chapterId);
         if (mounted && found) {
           setChapter(found);
@@ -674,18 +918,66 @@ function ChapterContent({ slug, chapterId, mode }: { slug: string; chapterId: st
     return <div className="flex items-center justify-center h-full text-text-secondary">Chapter not found</div>;
   }
 
+  const s = readerSettings;
+  const maxWidth = s.contentWidth === 'narrow' ? '40rem' : s.contentWidth === 'medium' ? '48rem' : '64rem';
+  const fontFamily = s.fontFamily === 'serif' ? 'ui-serif, Georgia, serif' : s.fontFamily === 'dyslexia' ? 'OpenDyslexic, Lexend, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif' : 'system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
+  const { isDark } = useTheme();
+  const deriveColors = () => {
+    let bg: string | undefined;
+    let fg: string | undefined;
+    if (s.localTheme === 'light') { bg = '#ffffff'; fg = '#0f172a'; }
+    else if (s.localTheme === 'dark') { bg = '#0F1117'; fg = '#ffffff'; }
+    else if (s.localTheme === 'inherit') {
+      if (isDark) { bg = '#0F1117'; fg = '#ffffff'; }
+      else { bg = '#ffffff'; fg = '#0f172a'; }
+    }
+
+    if (s.preset === 'sepia') { bg = '#FDF6E3'; fg = '#3F3A2C'; }
+    if (s.preset === 'dim') { bg = '#111827'; fg = '#E5E7EB'; }
+    if (s.preset === 'high') { bg = '#ffffff'; fg = '#000000'; }
+    if (s.pageColor) bg = s.pageColor;
+    return { bg, fg };
+  };
+  const colors = deriveColors();
+  const containerStyle: React.CSSProperties = {
+    backgroundColor: colors.bg,
+    color: colors.fg,
+    filter: `contrast(${s.contrast}%)`,
+    fontFamily,
+    hyphens: s.hyphenate ? ('auto' as any) : ('manual' as any),
+    WebkitHyphens: s.hyphenate ? ('auto' as any) : ('manual' as any),
+    wordBreak: s.hyphenate ? ('auto-phrase' as any) : ('normal' as any),
+    maxWidth,
+    paddingLeft: s.contentPadding,
+    paddingRight: s.contentPadding,
+    marginLeft: s.contentMargin,
+    marginRight: s.contentMargin,
+  };
+  const pStyle: React.CSSProperties = {
+    fontSize: `${s.fontSize}px`,
+    lineHeight: s.lineHeight,
+    letterSpacing: `${s.letterSpacing}px`,
+    textAlign: s.textAlign,
+    textIndent: `${s.firstLineIndent}px`,
+    marginBottom: `${s.paragraphSpacing}px`,
+  };
   return (
-    <div className="max-w-4xl mx-auto px-8 py-12 bg-bg-primary text-text-primary">
+    <div className="max-w-4xl mx-auto px-8 py-12 bg-transparent text-text-primary" style={containerStyle}>
       <h1 className="text-3xl font-bold text-text-primary mb-2">{chapter.title}</h1>
       <div className="text-sm text-text-tertiary mb-8">
         {new Date(chapter.createdAt).toLocaleDateString()}
       </div>
 
       {mode === 'novel' ? (
-        <div className="prose dark:prose-invert max-w-none">
-          <div className="text-text-primary leading-relaxed whitespace-pre-wrap">
-            {chapter.content}
-          </div>
+        <div className="text-text-primary">
+          {String(chapter.content || '')
+            .split(/\r?\n\r?\n+/)
+            .filter((p) => p.trim() !== '')
+            .map((para: string, idx: number) => (
+              <p key={idx} className="leading-relaxed whitespace-pre-wrap" style={pStyle}>
+                {para}
+              </p>
+            ))}
         </div>
       ) : (
         <div className="space-y-4">

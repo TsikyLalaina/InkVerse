@@ -12,10 +12,20 @@
       "static/css/app/layout.css",
       "static/chunks/app/layout.js"
     ],
-    "/auth/login/page": [
+    "/explore/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/auth/login/page.js"
+      "static/chunks/app/explore/page.js"
+    ],
+    "/project/[id]/chat/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/project/[id]/chat/page.js"
+    ],
+    "/project/[id]/layout": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/project/[id]/layout.js"
     ]
   }
 }

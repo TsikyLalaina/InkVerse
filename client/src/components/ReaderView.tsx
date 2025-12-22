@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { VariableSizeList as RWVariableSizeList } from 'react-window';
 import AutoSizer from 'react-virtualized-auto-sizer';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
+import { useTheme } from '@/components/providers/ThemeProvider';
 import { createApi } from '@/lib/api';
 
 // Chapter shape based on backend response
@@ -62,6 +63,7 @@ export function ReaderView({
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState<number | null>(null);
+  const { isDark } = useTheme();
 
   // Paginated load of chapters
   useEffect(() => {
@@ -122,7 +124,7 @@ export function ReaderView({
       try {
         const img = new Image();
         img.src = src;
-      } catch {}
+      } catch { }
     });
   }, [images, mode]);
 
@@ -256,7 +258,7 @@ export function ReaderView({
         if (cancelled) return;
         const el = sectionRefs.current[targetChapterId!];
         if (el) {
-          try { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch {}
+          try { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch { }
         }
       });
     })();
@@ -269,7 +271,7 @@ export function ReaderView({
     if (typeof targetPanelIndex !== 'number' || targetPanelIndex < 0) return;
     try {
       listRef.current?.scrollToItem?.(targetPanelIndex, 'start');
-    } catch {}
+    } catch { }
   }, [mode, targetPanelIndex]);
 
   // External scroll by percentage for novel mode
@@ -299,7 +301,7 @@ export function ReaderView({
       try {
         const idx = Math.round((pct / 100) * Math.max(0, totalPanels - 1));
         listRef.current?.scrollToItem?.(idx, 'start');
-      } catch {}
+      } catch { }
       // Fallback: direct scroll on outerRef
       const el = outerRef.current;
       if (el) {
@@ -365,7 +367,11 @@ export function ReaderView({
       let bg = undefined as string | undefined;
       let fg = undefined as string | undefined;
       if (s?.localTheme === 'light') { bg = '#ffffff'; fg = '#0f172a'; }
-      if (s?.localTheme === 'dark') { bg = '#0F1117'; fg = '#ffffff'; }
+      else if (s?.localTheme === 'dark') { bg = '#0F1117'; fg = '#ffffff'; }
+      else if (s?.localTheme === 'inherit') {
+        if (isDark) { bg = '#0F1117'; fg = '#ffffff'; }
+        else { bg = '#ffffff'; fg = '#0f172a'; }
+      }
       if (s?.preset === 'sepia') { bg = '#FDF6E3'; fg = '#3F3A2C'; }
       if (s?.preset === 'dim') { bg = '#111827'; fg = '#E5E7EB'; }
       if (s?.preset === 'high') { bg = '#ffffff'; fg = '#000000'; }
@@ -426,7 +432,7 @@ export function ReaderView({
           const pct = Math.round(getScrollPct(el));
           onProgress?.(pct, { index: Math.max(0, idx), total: Math.max(1, tot), id: bestId });
         }
-      } catch {}
+      } catch { }
     };
     return (
       <div ref={novelContainerRef} className="w-full h-full overflow-y-auto bg-bg-primary text-text-primary" role="feed" onScroll={onScroll} style={containerStyle}>
@@ -439,7 +445,16 @@ export function ReaderView({
               style={s?.paginate ? ({ scrollSnapAlign: 'start' } as any) : undefined}
             >
               <h3 className="text-xl font-semibold mb-3 text-text-primary">{ch.title}</h3>
-              <p className="leading-relaxed text-text-primary whitespace-pre-wrap" style={pStyle}>{ch.content}</p>
+              <div className="text-text-primary">
+                {String(ch?.content || '')
+                  .split(/\r?\n\r?\n+/)
+                  .filter((p) => p.trim() !== '')
+                  .map((para: string, idx: number) => (
+                    <p key={idx} className="leading-relaxed whitespace-pre-wrap" style={pStyle}>
+                      {para}
+                    </p>
+                  ))}
+              </div>
             </section>
           ))}
           {loadingMore && <div className="text-sm text-text-secondary">Loading more…</div>}
@@ -454,7 +469,10 @@ export function ReaderView({
     if (!s) return {} as any;
     let bg: string | undefined;
     if (s.localTheme === 'light') bg = '#ffffff';
-    if (s.localTheme === 'dark') bg = '#0F1117';
+    else if (s.localTheme === 'dark') bg = '#0F1117';
+    else if (s.localTheme === 'inherit') {
+      bg = isDark ? '#0F1117' : '#ffffff';
+    }
     if (s.preset === 'sepia') bg = '#FDF6E3';
     if (s.preset === 'dim') bg = '#111827';
     if (s.preset === 'high') bg = '#ffffff';
