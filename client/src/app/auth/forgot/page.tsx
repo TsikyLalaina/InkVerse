@@ -19,7 +19,7 @@ export default function ForgotPage() {
     setError(null);
     const origin = typeof window !== "undefined" ? window.location.origin : "";
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${origin}/auth/verify`,
+      redirectTo: `${origin}/auth/verify?type=recovery`,
     });
     if (error) setError(error.message);
     else setSent(true);

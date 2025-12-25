@@ -3,36 +3,59 @@
 export const dynamic = 'force-dynamic';
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useSupabase } from "@/components/providers/SupabaseProvider";
 import SystemWindow from "@/components/SystemWindow";
 import PortalBackground from "@/components/PortalBackground";
+import { AuthChangeEvent, Session } from "@supabase/supabase-js";
 
 export default function VerifyPage() {
   const supabase = useSupabase();
   const router = useRouter();
-  const [mode, setMode] = useState<"verifying" | "reset" | "done" | "error">("verifying");
+  const searchParams = useSearchParams();
+  const isRecovery = searchParams.get("type") === "recovery";
+  
+  const [mode, setMode] = useState<"verifying" | "reset" | "done" | "error">(
+    isRecovery ? "reset" : "verifying"
+  );
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+    // If we know it's a recovery flow from URL, we start in 'reset' mode (set in state init).
+    // We only listen for auth state changes if NOT in explicit recovery, 
+    // OR if we want to confirm the session is valid.
+    
+    // Actually, even in recovery flow, we need to ensure we hold a session (which the link provides).
+    // But the critical part is NOT redirecting.
+
+    const { data: sub } = supabase.auth.onAuthStateChange((event: AuthChangeEvent, session: Session | null) => {
       if (event === "PASSWORD_RECOVERY") {
         setMode("reset");
       } else if (event === "SIGNED_IN") {
-        setMode("done");
-        setTimeout(() => router.replace("/project"), 600);
+        // If it's recovery flow, we do NOT redirect yet. We wait for user to input password.
+        if (!isRecovery) {
+           setMode("done");
+           setTimeout(() => router.replace("/project"), 600);
+        }
       }
     });
-    // In case the session is already present (email confirm flow)
+
+    // Check initial session
     supabase.auth.getSession().then(({ data }) => {
+      // If we have a session but it's NOT recovery, redirect.
+      // If it IS recovery, we stay in 'reset' mode (or set it).
       if (data.session) {
-        setMode("done");
-        setTimeout(() => router.replace("/project"), 600);
+        if (!isRecovery) {
+          setMode("done");
+          setTimeout(() => router.replace("/project"), 600);
+        } else {
+          setMode("reset");
+        }
       }
     });
     return () => sub.subscription.unsubscribe();
-  }, [router, supabase]);
+  }, [router, supabase, isRecovery]);
 
   const submitNewPassword = async (e: React.FormEvent) => {
     e.preventDefault();
