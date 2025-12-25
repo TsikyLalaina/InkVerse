@@ -367,6 +367,39 @@ export function createApi(supabase: SupabaseClient) {
     patch: (path: string, body: any) =>
       apiFetch<any>(supabase, path, { method: 'PATCH', body: JSON.stringify(body) }),
     delete: (path: string) => apiFetch<any>(supabase, path, { method: 'DELETE' }),
+
+    // Feedback System
+    listFeedbacks: (filter?: 'all' | 'feature' | 'bug' | 'general' | 'content' | 'docs', sort?: 'newest' | 'votes') => {
+      // We will perform client-side filtering/sorting for simplicity as we are fetching directly from supabase table via simple RLS
+      // Actually, let's use the supabase client directly in the component for reading?
+      // No, let's keep consistency and use apiFetch wrappers if we had a dedicated API endpoint. 
+      // But for this task, since we modify schema directly, we can just use supabase client in the component for GETs.
+      // However, to abstract it cleanly in api.ts as requested:
+      let query = supabase.from('feedbacks').select('*, feedback_votes(user_id)'); 
+      // Note: feedback_votes(user_id) allows us to check if current user voted.
+      
+      if (filter && filter !== 'all') query = query.eq('category', filter);
+      if (sort === 'votes') query = query.order('votes', { ascending: false });
+      else query = query.order('created_at', { ascending: false });
+      
+      return query;
+    },
+    createFeedback: (body: { title: string; description: string; category: string; user_id: string }) =>
+      supabase.from('feedbacks').insert(body).select().single(),
+    
+    // Vote: toggle
+    voteFeedback: async (feedbackId: string, currentVote: boolean) => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not authenticated");
+      
+      if (currentVote) {
+        // Remove vote
+        return supabase.from('feedback_votes').delete().match({ feedback_id: feedbackId, user_id: user.id });
+      } else {
+        // Add vote
+        return supabase.from('feedback_votes').insert({ feedback_id: feedbackId, user_id: user.id });
+      }
+    }
   };
 }
 

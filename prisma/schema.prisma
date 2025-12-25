@@ -217,3 +217,31 @@ model UserProfile {
   @@map("user_profiles")
   @@schema("public")
 }
+
+model Feedback {
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String         @map("user_id") @db.Uuid
+  title       String
+  description String
+  category    String         // 'feature', 'bug', 'general', 'content', 'docs'
+  status      String         @default("open") // 'open', 'planned', 'in_progress', 'completed', 'closed'
+  votes       Int            @default(0)
+  createdAt   DateTime?      @default(now()) @map("created_at") @db.Timestamptz(6)
+  
+  feedbackVotes FeedbackVote[]
+
+  @@map("feedbacks")
+  @@schema("public")
+}
+
+model FeedbackVote {
+  feedbackId String    @map("feedback_id") @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  createdAt  DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
+  
+  feedback   Feedback  @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+
+  @@id([feedbackId, userId])
+  @@map("feedback_votes")
+  @@schema("public")
+}

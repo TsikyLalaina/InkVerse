@@ -10,6 +10,7 @@ import { createApi } from "@/lib/api";
 import { ReaderView } from "@/components/ReaderView";
 import { ProfileSettingsModal } from "@/components/ProfileSettingsModal";
 import { useTheme } from "@/components/providers/ThemeProvider";
+import Link from "next/link";
 
 type ProjectItem = {
   id: string;
@@ -615,6 +616,7 @@ function TopBar({ mode, onModeChange, userInitial, onSignOut, userStats, onProfi
           {open && (
             <div role="menu" className="absolute right-0 top-10 w-40 rounded-md border border-border-default bg-bg-elevated shadow-elevation text-sm">
               <button className="w-full text-left px-3 py-2 hover:bg-bg-hover text-text-secondary transition-micro" onClick={() => { setOpen(false); onProfileClick(); }}>Profile</button>
+              <Link href="/feedback" className="block w-full text-left px-3 py-2 hover:bg-bg-hover text-text-secondary transition-micro" onClick={() => setOpen(false)}>Feedback Hub</Link>
               <div className="border-t border-border-default" />
               <button className="w-full text-left px-3 py-2 hover:bg-bg-hover text-red-400 transition-micro" onClick={() => { setOpen(false); onSignOut(); }}>Sign out</button>
             </div>
