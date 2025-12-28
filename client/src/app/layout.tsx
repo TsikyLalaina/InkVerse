@@ -40,8 +40,8 @@ export const metadata: Metadata = {
     creator: '@InkVerseAI',
   },
   icons: {
-    icon: '/inkverse.png',
-    apple: '/inkverse.png', // Optional: also use for Apple touch icon
+    icon: '/inkverse.svg',
+    apple: '/inkverse.png', // Keep PNG for Apple touch icon (better compatibility)
   },
   manifest: '/manifest.webmanifest',
 };
