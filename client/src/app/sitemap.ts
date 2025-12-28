@@ -10,6 +10,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
     '/feedback',
     '/auth/login',
     '/auth/signup',
+    '/privacy',
+    '/terms',
   ].map((route) => ({
     url: `${baseUrl}${route}`,
     lastModified: new Date(),
