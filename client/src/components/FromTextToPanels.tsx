@@ -57,7 +57,12 @@ export default function FromTextToPanels() {
   return (
     <section className="relative w-full bg-gradient-to-b from-[#0A0A0A] to-[#0B0B12] py-16 md:py-24">
       <div className="mx-auto max-w-6xl px-6">
-        <h2 className="text-2xl md:text-3xl lg:text-4xl font-semibold text-white mb-6">From Text to Panels</h2>
+        <div className="flex flex-wrap items-center gap-3 mb-6">
+          <h2 className="text-2xl md:text-3xl lg:text-4xl font-semibold text-white">From Text to Panels</h2>
+          <span className="rounded-full border border-amber-400/60 bg-amber-400/10 px-3 py-1 text-xs font-semibold text-amber-300 uppercase tracking-wider shadow-[0_0_12px_rgba(251,191,36,0.3)]">
+            Coming Soon
+          </span>
+        </div>
         <p className="text-slate-400 mb-6">Each panel has its own prose. Swipe vertically on a card to reveal the art.</p>
 
         {(() => {
