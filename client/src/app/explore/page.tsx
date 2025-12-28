@@ -153,7 +153,7 @@ export default function ExplorePage() {
         <div className="mx-auto max-w-7xl px-4 sm:px-6 py-3 sm:py-4">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-0 mb-3 sm:mb-0">
             <div className="text-base sm:text-lg font-semibold tracking-elegant flex items-center gap-2">
-              <img src="/inkverse.png" alt="InkVerse" className="h-8 w-auto" />
+              <img src="/inkverse.svg" alt="InkVerse" className="h-8 w-auto dark:invert dark:brightness-0 dark:sepia-0 dark:opacity-90" />
               <span>EXPLORE PUBLIC LIBRARY</span>
             </div>
             <input

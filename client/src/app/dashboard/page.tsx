@@ -598,7 +598,7 @@ function TopBar({ mode, onModeChange, userInitial, onSignOut, userStats, onProfi
     <div className="fixed top-0 inset-x-0 h-14 border-b border-border-default/80 backdrop-blur-soft bg-bg-primary/60 z-10">
       <div className="mx-auto max-w-7xl h-full flex items-center justify-between px-4">
         <div className="font-semibold tracking-wide flex items-center gap-2">
-            <img src="/inkverse.png" alt="InkVerse" className="h-8 w-auto" />
+            <img src="/inkverse.svg" alt="InkVerse" className="h-8 w-auto dark:invert dark:brightness-0 dark:sepia-0 dark:opacity-90" />
             <span className="hidden sm:inline">InkVerse</span>
         </div>
         <div className="bg-bg-hover/60 rounded-full p-1 flex text-xs">
