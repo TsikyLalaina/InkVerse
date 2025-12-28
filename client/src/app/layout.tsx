@@ -25,7 +25,7 @@ export const metadata: Metadata = {
     siteName: 'InkVerse',
     images: [
       {
-        url: '/og-image.png', // Ensure this exists or use a placeholder
+        url: '/inkverse.png',
         width: 1200,
         height: 630,
         alt: 'InkVerse Preview',
@@ -36,6 +36,7 @@ export const metadata: Metadata = {
     card: 'summary_large_image',
     title: 'InkVerse — Awaken Your Story',
     description: 'AI-assisted novel and manhwa creation suite.',
+    images: ['/inkverse.png'],
     creator: '@InkVerseAI',
   },
   manifest: '/manifest.webmanifest',

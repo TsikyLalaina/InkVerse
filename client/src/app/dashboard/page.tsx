@@ -597,7 +597,10 @@ function TopBar({ mode, onModeChange, userInitial, onSignOut, userStats, onProfi
   return (
     <div className="fixed top-0 inset-x-0 h-14 border-b border-border-default/80 backdrop-blur-soft bg-bg-primary/60 z-10">
       <div className="mx-auto max-w-7xl h-full flex items-center justify-between px-4">
-        <div className="font-semibold tracking-wide">InkVerse</div>
+        <div className="font-semibold tracking-wide flex items-center gap-2">
+            <img src="/inkverse.png" alt="InkVerse" className="h-8 w-auto" />
+            <span className="hidden sm:inline">InkVerse</span>
+        </div>
         <div className="bg-bg-hover/60 rounded-full p-1 flex text-xs">
           <button
             className={`px-4 py-1.5 rounded-full transition-micro ${mode === "CREATE" ? "bg-accent text-black font-semibold" : "text-text-secondary hover:text-text-primary"}`}
