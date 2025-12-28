@@ -44,12 +44,14 @@ export default function Investor() {
         </div>
 
         {/* CTA */}
+        <div className="mt-10 flex justify-center">
           <Link
             href="mailto:tsikyloharanontsoa@ala-mg.com"
             className="rounded-lg bg-cyan-400 px-5 py-3 font-semibold text-black hover:bg-cyan-300 shadow-[0_0_20px_rgba(0,212,255,0.45)]"
           >
             CONTACT
           </Link>
+        </div>
       </div>
     </section>
   );

@@ -24,7 +24,7 @@ export const metadata = {
 
 export default function Home() {
   return (
-    <main>
+    <main className="min-h-screen bg-[#0A0A0A] text-white dark">
       <Hero titleClass={orbitron.className} monoClass={jetbrains.className} />
       <MuseSection />
       <RulesSection />

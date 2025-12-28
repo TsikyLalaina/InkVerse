@@ -39,10 +39,7 @@ export default function PrivacyPage() {
                 <p>We implement industry-standard security measures to protect your account and creative works.</p>
             </section>
 
-            <section>
-                <h2 className="text-xl font-semibold text-text-primary mb-3">5. Contact</h2>
-                <p>If you have questions about this policy, please contact us at <a href="mailto:privacy@inkverse.app" className="text-accent hover:underline">privacy@inkverse.app</a>.</p>
-            </section>
+
         </div>
        </div>
     </div>
