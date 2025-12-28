@@ -7,8 +7,37 @@ import nextDynamic from 'next/dynamic';
 export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
-  title: 'InkVerse',
-  description: 'AI manhwa creation suite',
+  metadataBase: new URL('https://inkverseapp.com'), // Replace with actual domain if known, default placeholder
+  title: {
+    default: 'InkVerse — AI Manhwa Creation Suite',
+    template: '%s | InkVerse',
+  },
+  description: 'Unleash your creativity with InkVerse. AI-assisted novel and manhwa creation tool. Turn your stories into visual masterpieces.',
+  keywords: ['AI', 'Manhwa', 'Webtoon', 'Novel', 'Writing', 'Comics', 'Creation', 'Stable Diffusion', 'Storytelling'],
+  authors: [{ name: 'InkVerse Team' }],
+  creator: 'InkVerse',
+  openGraph: {
+    type: 'website',
+    locale: 'en_US',
+    url: 'https://inkverseapp.com',
+    title: 'InkVerse — Awaken Your Story',
+    description: 'AI-assisted novel and manhwa creation suite.',
+    siteName: 'InkVerse',
+    images: [
+      {
+        url: '/og-image.png', // Ensure this exists or use a placeholder
+        width: 1200,
+        height: 630,
+        alt: 'InkVerse Preview',
+      },
+    ],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'InkVerse — Awaken Your Story',
+    description: 'AI-assisted novel and manhwa creation suite.',
+    creator: '@InkVerseAI',
+  },
   manifest: '/manifest.webmanifest',
 };
 

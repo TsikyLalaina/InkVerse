@@ -140,12 +140,12 @@ export default function Hero({ titleClass, monoClass }: { titleClass: string; mo
                   NOVEL WRITER
                 </Link>
                 <Link
-                  href={isLoggedIn ? "/dashboard" : "/auth/signup"}
+                  href="/feedback"
                   onMouseEnter={() => playBlip(540, 0.06)}
                   onClick={() => playBlip(720, 0.1)}
                   className={`${monoClass} rounded border border-cyan-400/60 bg-cyan-400/10 px-4 py-2 text-cyan-200 hover:bg-cyan-400/20 transition shadow-[0_0_16px_rgba(0,212,255,0.25)]`}
                 >
-                  MANHWA CREATOR
+                  FEEDBACK BOARD
                 </Link>
                 <Link
                   href="/explore"

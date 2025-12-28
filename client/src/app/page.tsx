@@ -13,8 +13,13 @@ const Investor = dynamic(() => import('@/components/Investor'), { ssr: false });
 const AwakenCTA = dynamic(() => import('@/components/AwakenCTA'), { ssr: false });
 
 export const metadata = {
-  title: 'InkVerse — Awaken Your Story',
+  title: {
+    absolute: 'InkVerse — Awaken Your Story',
+  },
   description: 'AI-assisted novel and manhwa creation. Enter the Gate and craft your world with InkVerse.',
+  alternates: {
+    canonical: 'https://inkverseapp.com',
+  },
 };
 
 export default function Home() {
