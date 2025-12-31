@@ -33,8 +33,15 @@ const updateBody = z.object({ title: z.string().min(1).optional(), description: 
 const settingsBody = z.object({
   title: z.string().min(1).optional(),
   description: z.string().optional(),
-  coverImage: z.string().url().optional(),
-  cover_image: z.string().url().optional(),
+  coverImage: z.string().optional().transform(v => {
+    if (!v || v.trim() === '') return undefined;
+    // Only accept valid URLs
+    try { new URL(v); return v; } catch { return undefined; }
+  }),
+  cover_image: z.string().optional().transform(v => {
+    if (!v || v.trim() === '') return undefined;
+    try { new URL(v); return v; } catch { return undefined; }
+  }),
   genres: z.array(z.string()).optional(),
   coreConflict: z.string().optional(),
   settingsJson: z.any().optional(),
