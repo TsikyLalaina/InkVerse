@@ -543,8 +543,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         }
       }
     } catch {}
-    // keep caret at end while typing if needed
-    try { if (editorRef.current) placeCaretAtEnd(editorRef.current); } catch {}
+    // Removed placeCaretAtEnd call - cursor should stay at current position during editing
   };
 
   const onNewChapter = async () => {
@@ -943,10 +942,18 @@ export function Workspace({ projectId }: { projectId: string }) {
         {rightOpen && !isMobile && (
         <aside className="relative bg-bg-primary min-h-0 flex flex-col">
           <div className="px-5 py-4 text-xs font-semibold tracking-[0.05em] uppercase flex items-center justify-between text-text-secondary">
-            <button className="flex items-center gap-2 text-text-secondary hover:text-text-primary" onClick={() => setChatMenuOpen((v)=>!v)}>
-              <span className="truncate max-w-[140px] text-text-primary normal-case text-sm font-medium">{(chats.find(c=>c.id===activeChatId)?.title) || 'Select chat'}</span>
-              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${chatMenuOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
-            </button>
+            <div className="flex items-center gap-2 min-w-0">
+              <button className="flex items-center gap-2 text-text-secondary hover:text-text-primary" onClick={() => setChatMenuOpen((v)=>!v)}>
+                <span className="truncate max-w-[120px] text-text-primary normal-case text-sm font-medium">{(chats.find(c=>c.id===activeChatId)?.title) || 'Select chat'}</span>
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform flex-shrink-0 ${chatMenuOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+              </button>
+              {chatLoading && (
+                <div className="flex items-center gap-1.5 text-accent animate-pulse">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                  <span className="text-xs normal-case font-normal">Responding...</span>
+                </div>
+              )}
+            </div>
             <div className="flex items-center gap-2">
               <button className="text-text-tertiary hover:text-accent rounded p-1 hover:bg-bg-hover transition-all duration-150" onClick={() => { setNewChatOpen(true); setChatMenuOpen(true); }} title="New Chat">
                 <Plus className="w-4 h-4" aria-hidden="true" />
@@ -1087,10 +1094,18 @@ export function Workspace({ projectId }: { projectId: string }) {
       {isMobile && rightOpen && (
         <aside className="fixed right-0 top-0 bottom-0 z-40 w-64 shadow-elevation bg-bg-primary flex flex-col">
           <div className="px-5 py-4 text-xs font-semibold tracking-[0.05em] uppercase flex items-center justify-between text-text-secondary">
-            <button className="flex items-center gap-2 text-text-secondary hover:text-text-primary" onClick={() => setChatMenuOpen((v)=>!v)}>
-              <span className="truncate max-w-[140px] text-text-primary normal-case text-sm font-medium">{(chats.find(c=>c.id===activeChatId)?.title) || 'Select chat'}</span>
-              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${chatMenuOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
-            </button>
+            <div className="flex items-center gap-2 min-w-0">
+              <button className="flex items-center gap-2 text-text-secondary hover:text-text-primary" onClick={() => setChatMenuOpen((v)=>!v)}>
+                <span className="truncate max-w-[100px] text-text-primary normal-case text-sm font-medium">{(chats.find(c=>c.id===activeChatId)?.title) || 'Select chat'}</span>
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform flex-shrink-0 ${chatMenuOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+              </button>
+              {chatLoading && (
+                <div className="flex items-center gap-1.5 text-accent animate-pulse">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                  <span className="text-xs normal-case font-normal">AI</span>
+                </div>
+              )}
+            </div>
             <div className="flex items-center gap-2">
               <button className="text-text-tertiary hover:text-accent rounded p-1 hover:bg-bg-hover transition-all duration-150" onClick={() => { setNewChatOpen(true); setChatMenuOpen(true); }} title="New Chat">
                 <Plus className="w-4 h-4" aria-hidden="true" />
