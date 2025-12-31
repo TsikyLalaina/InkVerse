@@ -338,7 +338,16 @@ export function Chat({ chatId, projectId, chatType = 'plot', initialMessages = [
               draggable={Boolean(m.panelId)}
             />)
           )}
-          {/* Removed typing animation indicator per request */}
+          {/* Typing indicator - ChatGPT style animated dots */}
+          {streaming && (
+            <div className="max-w-3xl">
+              <div className="rounded-2xl px-4 py-3 shadow-sm border bg-bg-primary border-border-default inline-flex items-center gap-1">
+                <span className="w-2 h-2 bg-text-tertiary rounded-full animate-bounce" style={{ animationDelay: '0ms', animationDuration: '600ms' }} />
+                <span className="w-2 h-2 bg-text-tertiary rounded-full animate-bounce" style={{ animationDelay: '150ms', animationDuration: '600ms' }} />
+                <span className="w-2 h-2 bg-text-tertiary rounded-full animate-bounce" style={{ animationDelay: '300ms', animationDuration: '600ms' }} />
+              </div>
+            </div>
+          )}
         </div>
 
       {toastMsg && (
