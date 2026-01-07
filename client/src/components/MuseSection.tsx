@@ -108,19 +108,16 @@ export default function MuseSection() {
               <button onClick={() => setOpen(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
             <div className="aspect-video w-full overflow-hidden rounded-lg border border-slate-800 bg-black">
-              {demoUrl ? (
-                <iframe
-                  className="h-full w-full"
-                  src={demoUrl}
-                  title="InkVerse Demo"
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                  allowFullScreen
-                />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center text-slate-300 text-sm">
-                  Demo coming soon. Set NEXT_PUBLIC_DEMO_URL to show your video.
-                </div>
-              )}
+              <video
+                className="h-full w-full object-contain"
+                src="/demofinal.mp4"
+                title="InkVerse Demo"
+                controls
+                playsInline
+                autoPlay
+              >
+                Your browser does not support the video tag.
+              </video>
             </div>
           </div>
         </div>
