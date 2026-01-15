@@ -66,6 +66,7 @@ model Chapter {
   panelScript   Json?         @map("panel_script")
   branchId      String?       @map("branch_id") @db.Uuid
   order         Int           @default(0) @map("order")
+  price         Int           @default(0) @map("price") // Cost in coins. 0 = Free
   isCanon       Boolean?      @default(true) @map("is_canon")
   createdAt     DateTime?     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime?     @default(now()) @map("updated_at") @db.Timestamptz(6)
@@ -213,8 +214,74 @@ model UserProfile {
   createdAt    DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime? @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  // Monetization
+  paidCoins    Int       @default(0) @map("paid_coins")
+  bonusCoins   Int       @default(0) @map("bonus_coins")
+  transactions Transaction[]
+
   @@index([userId], map: "idx_user_profile_user_id")
   @@map("user_profiles")
+  @@schema("public")
+}
+
+enum TransactionType {
+  purchase      // User bought coins (Stripe)
+  reward        // User earned coins (XP level up)
+  unlock        // User spent coins (Read Chapter)
+  payout        // Author withdrew earnings
+  adjustment    // Admin correction
+
+  @@schema("public")
+}
+
+model Transaction {
+  id          String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String          @map("user_id") @db.Uuid
+  type        TransactionType
+  amount      Int             // Positive for add, Negative for spend
+  currency    String          // "paid" or "bonus"
+  referenceId String?         @map("reference_id") // ID of Chapter, StripeIntent, etc.
+  description String?
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user        UserProfile     @relation(fields: [userId], references: [userId])
+
+  @@map("transactions")
+  @@schema("public")
+}
+
+model UnlockedContent {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  chapterId String   @map("chapter_id") @db.Uuid
+  paidPrice Int      @map("paid_price") // How many paid coins used
+  bonusPrice Int     @map("bonus_price") // How many bonus coins used
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([userId, chapterId]) // Prevent duplicate purchases
+  @@map("unlocked_content")
+  @@schema("public")
+}
+
+enum PayoutStatus {
+  pending
+  approved
+  rejected
+
+  @@schema("public")
+}
+
+model PayoutRequest {
+  id        String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String       @map("user_id") @db.Uuid
+  amount    Int          // In Cents (USD)
+  coinsDeducted Int      @map("coins_deducted") // How many Paid Coins were removed from their 'Revenue Balance'
+  status    PayoutStatus @default(pending)
+  note      String?      // Admin note (e.g. "Sent via PayPal Transaction #123")
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("payout_requests")
   @@schema("public")
 }
 
@@ -243,5 +310,15 @@ model FeedbackVote {
 
   @@id([feedbackId, userId])
   @@map("feedback_votes")
+  @@schema("public")
+}
+
+model Admin {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @unique @map("user_id") @db.Uuid
+  role      String   @default("superadmin") // 'superadmin', 'moderator', etc.
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("admins")
   @@schema("public")
 }

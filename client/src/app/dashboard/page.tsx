@@ -3,13 +3,14 @@
 export const dynamic = 'force-dynamic';
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Download, GitBranch, FolderOpen, Share2, BookOpen, Trash2 } from "lucide-react";
+import { Plus, Download, GitBranch, FolderOpen, Share2, BookOpen, Trash2, DollarSign, Coins } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useSupabase } from "@/components/providers/SupabaseProvider";
 import { createApi } from "@/lib/api";
 import { ReaderView } from "@/components/ReaderView";
 import { ProfileSettingsModal } from "@/components/ProfileSettingsModal";
 import { useTheme } from "@/components/providers/ThemeProvider";
+import { RevenueDashboard } from "@/components/monetization/RevenueDashboard";
 import Link from "next/link";
 
 type ProjectItem = {
@@ -30,6 +31,7 @@ export default function DashboardPage() {
   const supabase = useSupabase();
   const api = useMemo(() => createApi(supabase), [supabase]);
   const router = useRouter();
+  const { setTheme } = useTheme();
 
   const [mode, setMode] = useState<Mode>("CREATE");
   const [overlay, setOverlay] = useState(false);
@@ -52,6 +54,7 @@ export default function DashboardPage() {
   const [createErr, setCreateErr] = useState<string | null>(null);
   const [createLoading, setCreateLoading] = useState(false);
   const [userStats, setUserStats] = useState<any>(null);
+  const [wallet, setWallet] = useState<{ paidCoins: number; bonusCoins: number; total: number } | null>(null);
   const [exportDialog, setExportDialog] = useState<{ projectId: string; title: string } | null>(null);
   const [exportLoading, setExportLoading] = useState(false);
   const [exportAllDialog, setExportAllDialog] = useState(false);
@@ -63,6 +66,7 @@ export default function DashboardPage() {
   const [readerControlsOpen, setReaderControlsOpen] = useState(false);
   const [isLargeScreen, setIsLargeScreen] = useState(false);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
+
 
   // Check screen size on mount and resize
   useEffect(() => {
@@ -109,10 +113,18 @@ export default function DashboardPage() {
 
         // Then fetch projects and use synced stats
         const list = await api.listProjects();
+        const wallet = await api.getWalletBalance().catch(() => null);
+        const profile = await api.get('/api/user/profile').catch(() => null);
 
         if (!mounted) return;
         setProjects(list as ProjectItem[]);
         if (syncedStats) setUserStats(syncedStats);
+        if (wallet) setWallet(wallet);
+        
+        // Sync theme
+        if (profile && (profile as any).theme) {
+             setTheme((profile as any).theme);
+        }
       } catch (e: any) {
         if (!mounted) return;
         setError(e?.message || "Failed to load projects");
@@ -121,7 +133,7 @@ export default function DashboardPage() {
       }
     })();
     return () => { mounted = false; };
-  }, [api, authChecked]);
+  }, [api, authChecked, setTheme]);
 
   const filtered = useMemo(() => {
     if (!query.trim()) return projects;
@@ -374,7 +386,7 @@ export default function DashboardPage() {
             statsOpen={statsOpen}
             controlsOpen={actionsOpen}
           >
-            {(statsOpen || isLargeScreen) && <LeftStats projectsCount={projects.length} stats={userStats} />}
+            {(statsOpen || isLargeScreen) && <LeftStats projectsCount={projects.length} stats={userStats} wallet={wallet} />}
             <CenterProjects
               items={filtered}
               loading={loading}
@@ -480,6 +492,7 @@ export default function DashboardPage() {
           />
         )}
         <ProfileSettingsModal isOpen={profileModalOpen} onClose={() => setProfileModalOpen(false)} />
+
       </div>
     </div>
   );
@@ -668,7 +681,7 @@ function MainLayout({ children, showToggleButtons, onToggleStats, onToggleFilter
   );
 }
 
-function LeftStats({ projectsCount, stats }: { projectsCount: number; stats: any }) {
+function LeftStats({ projectsCount, stats, wallet }: { projectsCount: number; stats: any; wallet?: { total: number } | null }) {
   const level = stats?.level || 1;
   const currentExp = stats?.currentLevelExp || 0;
   const nextExp = stats?.nextLevelExp || 100;
@@ -692,10 +705,24 @@ function LeftStats({ projectsCount, stats }: { projectsCount: number; stats: any
         <div className="flex items-center justify-between"><span className="text-text-secondary">Projects</span><span className="text-text-primary">{projectsCount}</span></div>
         <div className="flex items-center justify-between"><span className="text-text-secondary">Chapters</span><span className="text-text-primary">{chaptersCount}</span></div>
         <div className="flex items-center justify-between"><span className="text-text-secondary">Words</span><span className="text-text-primary">{wordsCount}</span></div>
+        <div className="pt-4 border-t border-border-default mt-4 space-y-2">
+          {wallet && (
+            <div className="flex items-center justify-between text-yellow-500 font-semibold mb-2">
+              <span className="flex items-center gap-1.5"><Coins size={14} /> Coins</span>
+              <span>{wallet.total}</span>
+            </div>
+          )}
+           <Link href="/revenue" className="w-full text-left flex items-center gap-2 text-text-secondary hover:text-accent font-medium text-xs transition mb-2">
+             <DollarSign size={14} />
+             <span>Revenue Dashboard</span>
+           </Link>
+        </div>
       </div>
     </aside>
   );
 }
+
+
 
 function CenterProjects({ items, loading, error, onOpen, onBranch, onExport, onCreate, onDelete }: { items: ProjectItem[]; loading: boolean; error: string | null; onOpen: (id: string) => void; onBranch: (id: string) => void; onExport: (id: string) => void; onCreate: () => void; onDelete: (id: string) => void; }) {
   return (
@@ -805,6 +832,10 @@ const RightActions = memo(function RightActions({ query, onQuery, onCreate, onEx
         <Download className="w-4 h-4" aria-hidden="true" />
         <span>Export All</span>
       </button>
+      <a href="/store" className="w-full rounded-md border border-border-default px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:scale-[1.02] transition-all duration-micro inline-flex items-center justify-center gap-2" title="Get More Coins">
+        <Coins size={14} />
+        <span>Get More Coins</span>
+      </a>
       <label className="flex items-center gap-2 text-xs text-text-secondary pt-1">
         <input type="checkbox" checked={overlay} onChange={onToggleOverlay} className="accent-accent" />
         Cyan grid overlay
@@ -1146,7 +1177,16 @@ function RightControls({ sort, onSort, view, onView }: { sort: "recent" | "rank"
         <button onClick={() => onView("list")} className={`flex-1 rounded-md px-3 py-2 text-sm border transition-all duration-micro ${view === "list" ? "bg-accent text-black border-accent" : "border-border-default text-text-secondary hover:bg-bg-hover"}`}>List</button>
         <button onClick={() => onView("gallery")} className={`flex-1 rounded-md px-3 py-2 text-sm border transition-all duration-micro ${view === "gallery" ? "bg-accent text-black border-accent" : "border-border-default text-text-secondary hover:bg-bg-hover"}`}>Gallery</button>
       </div>
-      {/* Dark mode toggle removed */}
+      <div className="pt-4 border-t border-border-default mt-4 space-y-2">
+         <a href="/explore" className="flex items-center gap-2 text-text-secondary hover:text-accent font-medium text-xs transition">
+            <BookOpen size={14} />
+            <span>Browse Public Library</span>
+         </a>
+         <a href="/store" className="flex items-center gap-2 text-text-secondary hover:text-accent font-medium text-xs transition">
+            <Coins size={14} />
+            <span>Coin Store</span>
+         </a>
+      </div>
     </aside>
   );
 }

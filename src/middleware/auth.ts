@@ -64,6 +64,13 @@ const authPlugin: FastifyPluginCallback<AuthPluginOptions> = (fastify, opts, don
     await handleAuth(request, reply, optional);
   });
 
+  // Verify authentication decorator
+  fastify.decorate('auth', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(request as any).user) {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
+  });
+
   done();
 };
 

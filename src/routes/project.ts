@@ -164,6 +164,8 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
         content: body.content ?? '',
         // @ts-ignore: panelScript is Json field
         panelScript: body.panel_script ?? undefined,
+        // @ts-ignore
+        price: (body as any).price ?? 0,
         branchId: body.branchId ?? null,
         // @ts-ignore
         isCanon: body.isCanon ?? true,
@@ -195,6 +197,7 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
       title: z.string().min(1).optional(),
       content: z.string().optional(),
       panel_script: z.any().optional(),
+      price: z.number().int().min(0).optional(),
     }).refine((v) => Object.keys(v).length > 0, { message: 'No fields to update' }).parse(req.body);
 
     const updated = await prisma.chapter.updateMany({
@@ -204,6 +207,8 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
         content: body.content ?? undefined,
         // @ts-ignore
         panelScript: body.panel_script ?? undefined,
+        // @ts-ignore
+        price: body.price ?? undefined,
       },
     });
     if (updated.count === 0) return reply.code(404).send({ error: 'Not found' });
@@ -571,11 +576,11 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     // Owner access if authenticated
     let accessProject: any = null;
     if (user?.id) {
-      accessProject = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true } });
+      accessProject = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true, userId: true } });
     }
     // Public access if not owner
     if (!accessProject) {
-      const pub = await prisma.project.findFirst({ where: { id: params.id, visibility: 'public' as any }, select: { id: true } } as any);
+      const pub = await prisma.project.findFirst({ where: { id: params.id, visibility: 'public' as any }, select: { id: true, userId: true } } as any);
       if (!pub) return reply.code(404).send({ error: 'Not found' });
       accessProject = pub as any;
     }
@@ -586,8 +591,53 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
       orderBy: { createdAt: 'asc' },
       skip: qp.page * qp.limit,
       take: qp.limit,
-      select: { id: true, title: true, content: true, panelScript: true, createdAt: true },
+      // @ts-ignore
+      select: { id: true, title: true, content: true, panelScript: true, createdAt: true, price: true },
     });
+
+    // Post-process to mask content if locked
+    if (!user?.id && items.some(i => (i as any).price > 0)) {
+       // Anonymous users can't see paid chapters
+       items.forEach((i: any) => {
+         if (i.price > 0) {
+           i.content = "LOCKED_CONTENT";
+           i.panelScript = null;
+         }
+       });
+    } else if (user?.id) {
+       // Check which are unlocked
+       const paidChapters = items.filter((i: any) => i.price > 0).map(i => i.id);
+       
+       req.log.info({ paidChaptersCount: paidChapters.length, userId: user.id }, 'Checking paid chapters access');
+
+       if (paidChapters.length > 0) {
+         const unlocked = await prisma.unlockedContent.findMany({
+           where: {
+             userId: user.id,
+             chapterId: { in: paidChapters }
+           },
+           select: { chapterId: true }
+         });
+         const unlockedIds = new Set(unlocked.map(u => u.chapterId));
+         
+         const projectInfo = await prisma.project.findUnique({ where: { id: params.id }, select: { userId: true } });
+         const isOwner = projectInfo?.userId === user.id;
+
+         req.log.info({ isOwner, unlockedCount: unlockedIds.size, projectOwner: projectInfo?.userId }, 'Access check details');
+         
+         if (!isOwner) {
+            items.forEach((i: any) => {
+              if (i.price > 0 && !unlockedIds.has(i.id)) {
+                // Formatting log to confirm masking happens
+                req.log.info({ chapterId: i.id }, 'Masking locked chapter content');
+                i.content = "LOCKED_CONTENT";
+                i.panelScript = null;
+              }
+            });
+         }
+       }
+    }
+    
     return reply.send({ items, total });
   });
 
@@ -995,16 +1045,50 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
   app.get('/public/project/:slug/chapters', async (req, reply) => {
     const { slug } = z.object({ slug: z.string().min(1) }).parse(req.params as any);
     const qp = z.object({ page: z.coerce.number().int().min(0).default(0), limit: z.coerce.number().int().min(1).max(100).default(20) }).parse((req as any).query || {});
-    const project = await (prisma as any).project.findFirst({ where: { publicSlug: slug, visibility: 'public' }, select: { id: true } } as any);
+    const user = (req as any).user; 
+
+    const project = await (prisma as any).project.findFirst({ where: { publicSlug: slug, visibility: 'public' }, select: { id: true, userId: true } } as any);
     if (!project) return reply.code(404).send({ error: 'Not found' });
     const total = await prisma.chapter.count({ where: { projectId: project.id, isCanon: true as any } });
+    
+    // Select price
     const items = await prisma.chapter.findMany({
       where: { projectId: project.id, isCanon: true as any },
       orderBy: { createdAt: 'asc' },
       skip: qp.page * qp.limit,
       take: qp.limit,
-      select: { id: true, title: true, content: true, panelScript: true, createdAt: true },
+      select: { id: true, title: true, content: true, panelScript: true, createdAt: true, price: true },
     });
+
+    // Masking Logic
+    const paidChapters = items.filter((i: any) => i.price > 0).map(i => i.id);
+    if (paidChapters.length > 0) {
+      let unlockedIds = new Set<string>();
+      let isOwner = false;
+
+      if (user?.id) {
+        // If logged in, check ownership and unlocked status
+        isOwner = (project as any).userId === user.id;
+        if (!isOwner) {
+          const unlocked = await prisma.unlockedContent.findMany({
+            where: { userId: user.id, chapterId: { in: paidChapters } },
+            select: { chapterId: true }
+          });
+          unlockedIds = new Set(unlocked.map(u => u.chapterId));
+        }
+      }
+
+      // If not owner, mask any paid chapters that are not unlocked
+      if (!isOwner) {
+        items.forEach((i: any) => {
+          if (i.price > 0 && !unlockedIds.has(i.id)) {
+            i.content = "LOCKED_CONTENT";
+            i.panelScript = null;
+          }
+        });
+      }
+    }
+
     return reply.send({ items, total });
   });
 

@@ -1,0 +1,1339 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const zod_1 = require("zod");
+const prisma_1 = require("../db/prisma");
+const groq_sdk_1 = __importDefault(require("groq-sdk"));
+const groq_1 = require("../services/groq");
+const memory_1 = require("../services/memory");
+const bullmq_1 = require("bullmq");
+const ioredis_1 = __importDefault(require("ioredis"));
+const fal_1 = require("../services/fal");
+const expAwarder_1 = require("../utils/expAwarder");
+const groq = new groq_sdk_1.default({ apiKey: process.env.GROQ_API_KEY || '' });
+const bodySchema = zod_1.z.object({
+    message: zod_1.z.string().min(1),
+    regeneratePanelId: zod_1.z.string().uuid().optional(),
+    clientMode: zod_1.z.enum(['chat', 'action']).optional(),
+    mentions: zod_1.z.object({ chapter_number: zod_1.z.coerce.number().int().min(1).optional(), title: zod_1.z.string().min(1).optional() }).optional(),
+});
+const paramsByChat = zod_1.z.object({ chatId: zod_1.z.string().uuid() });
+const chatRoutes = (app, _opts, done) => {
+    // List chat messages by chatId (ascending)
+    app.get('/chat/:chatId/messages', async (req, reply) => {
+        const user = req.user;
+        if (!user?.id)
+            return reply.code(401).send({ error: 'Unauthorized' });
+        const params = paramsByChat.parse(req.params);
+        const chat = await prisma_1.prisma.chat.findFirst({
+            where: { id: params.chatId },
+            select: { id: true, projectId: true, project: { select: { id: true, userId: true } } },
+        });
+        if (!chat || chat.project.userId !== user.id)
+            return reply.code(404).send({ error: 'Not found' });
+        const messages = await prisma_1.prisma.chatMessage.findMany({
+            where: { chatId: params.chatId },
+            orderBy: { createdAt: 'asc' },
+            select: { id: true, role: true, content: true, panelId: true },
+        });
+        return reply.send(messages);
+    });
+    // Stream chat by chatId
+    app.post('/chat/:chatId', async (req, reply) => {
+        const user = req.user;
+        if (!user?.id)
+            return reply.code(401).send({ error: 'Unauthorized' });
+        const params = paramsByChat.parse(req.params);
+        const body = bodySchema.parse(req.body);
+        const chatRow = await prisma_1.prisma.chat.findFirst({
+            where: { id: params.chatId },
+            select: { id: true, type: true, projectId: true, project: { select: { id: true, userId: true, mode: true } } },
+        });
+        if (!chatRow || chatRow.project.userId !== user.id)
+            return reply.code(404).send({ error: 'Not found' });
+        const projectIdStr = chatRow.projectId;
+        const chatType = (chatRow.type || 'plot');
+        // Because we stream via reply.raw and end manually, Fastify hooks (like CORS) won't add headers.
+        // Set essential headers explicitly for CORS + SSE.
+        const origin = req.headers.origin || '*';
+        reply.raw.setHeader('Access-Control-Allow-Origin', origin);
+        reply.raw.setHeader('Vary', 'Origin');
+        reply.raw.setHeader('Access-Control-Expose-Headers', '*');
+        reply.raw.setHeader('Content-Type', 'text/event-stream');
+        reply.raw.setHeader('Cache-Control', 'no-cache');
+        reply.raw.setHeader('Connection', 'keep-alive');
+        const send = (data) => {
+            reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+        };
+        try {
+            const userMsg = await prisma_1.prisma.chatMessage.create({
+                data: {
+                    chatId: params.chatId,
+                    role: 'user',
+                    content: body.message,
+                    panelId: body.regeneratePanelId ?? null,
+                },
+            });
+            // Save to long-term memory (best-effort)
+            void (0, memory_1.saveChatMemory)(params.chatId, 'user', body.message);
+            const persistAssistant = async (text) => {
+                try {
+                    const t = (text || '').trim();
+                    if (!t)
+                        return;
+                    await prisma_1.prisma.chatMessage.create({
+                        data: { chatId: params.chatId, role: 'assistant', content: t, panelId: null },
+                    });
+                    void (0, memory_1.saveChatMemory)(params.chatId, 'assistant', t);
+                }
+                catch { }
+            };
+            const clientMode = (body.clientMode === 'action' ? 'action' : 'chat');
+            const mentions = (body.mentions || {});
+            let intent = 'none';
+            let intentArgs = {};
+            // --- Character/World helpers (strict JSON) ---
+            const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+            const deepMerge = (base, patch) => {
+                if (!isObj(base))
+                    base = {};
+                if (!isObj(patch))
+                    return base;
+                const out = Array.isArray(base) ? [...base] : { ...base };
+                for (const k of Object.keys(patch)) {
+                    const pv = patch[k];
+                    const bv = base[k];
+                    if (Array.isArray(pv))
+                        out[k] = pv.slice();
+                    else if (isObj(pv))
+                        out[k] = deepMerge(isObj(bv) ? bv : {}, pv);
+                    else
+                        out[k] = pv;
+                }
+                return out;
+            };
+            const cleanStr = (v) => {
+                if (typeof v !== 'string')
+                    return undefined;
+                const t = v.trim();
+                return t.length ? t : undefined;
+            };
+            const isStr = (v) => typeof v === 'string';
+            const toStr = (v) => {
+                if (typeof v === 'string')
+                    return v.trim();
+                if (Array.isArray(v))
+                    return v.filter((x) => typeof x === 'string').join(', ').trim() || undefined;
+                if (v && typeof v === 'object')
+                    return JSON.stringify(v).slice(0, 2000);
+                return undefined;
+            };
+            const isPlaceholder = (s) => !!s && /not yet defined|tbd|^n\/?a$/i.test(s);
+            const normalizeWorldTraits = (src) => {
+                const t = isObj(src) ? { ...src } : {};
+                const geo = t.geography;
+                if (geo && typeof geo === 'object') {
+                    const gcities = toStr(geo.cities);
+                    const ghouses = toStr(geo.houses);
+                    const gland = toStr(geo.landscape);
+                    if (gcities && (!isStr(t.cities) || isPlaceholder(t.cities)))
+                        t.cities = gcities;
+                    if (ghouses && (!isStr(t.houses) || isPlaceholder(t.houses)))
+                        t.houses = ghouses;
+                    if (gland && (!isStr(t.landscape) || isPlaceholder(t.landscape)))
+                        t.landscape = gland;
+                    const gstr = toStr(geo.geography) || toStr(geo.terrain) || undefined;
+                    if (gstr && (!isStr(t.geography) || isPlaceholder(t.geography)))
+                        t.geography = gstr;
+                }
+                ['geography', 'landscape', 'cities', 'houses'].forEach((k) => {
+                    if (!isStr(t[k])) {
+                        const s = toStr(t[k]);
+                        if (s)
+                            t[k] = s;
+                    }
+                });
+                if (geo && typeof geo === 'object') {
+                    try {
+                        delete t.geography.cities;
+                    }
+                    catch { }
+                    try {
+                        delete t.geography.houses;
+                    }
+                    catch { }
+                    try {
+                        delete t.geography.landscape;
+                    }
+                    catch { }
+                    if (typeof t.geography === 'object' && Object.keys(t.geography).length === 0)
+                        delete t.geography;
+                }
+                return t;
+            };
+            // Extract the first top-level JSON object from the user's message (balanced braces, string-aware)
+            const extractFirstJsonObject = (text) => {
+                try {
+                    const s = String(text || '');
+                    for (let i = 0; i < s.length; i++) {
+                        if (s[i] === '{') {
+                            let depth = 1;
+                            let inStr = false;
+                            let esc = false;
+                            for (let j = i + 1; j < s.length; j++) {
+                                const ch = s[j];
+                                if (inStr) {
+                                    if (!esc && ch === '"')
+                                        inStr = false;
+                                    esc = ch === '\\' && !esc;
+                                }
+                                else {
+                                    if (ch === '"')
+                                        inStr = true;
+                                    else if (ch === '{')
+                                        depth++;
+                                    else if (ch === '}') {
+                                        depth--;
+                                        if (depth === 0) {
+                                            const slice = s.slice(i, j + 1);
+                                            try {
+                                                const parsed = JSON.parse(slice);
+                                                if (parsed && typeof parsed === 'object')
+                                                    return parsed;
+                                            }
+                                            catch { }
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                catch { }
+                return null;
+            };
+            const deriveCharacterFromConversation = async () => {
+                const sys = [
+                    'You are a helper that writes ONLY strict JSON for a Character object.',
+                    'Return ONLY a single JSON object with optional keys: { name, role, summary, traits }',
+                    'If the user indicates to "save", "apply", "commit", or "update" (synonyms), include ALL fields from the most recent assistant proposal, especially include full traits JSON. Do not omit traits.',
+                    'If the user does NOT indicate save/apply/commit/update, return an empty object: {}.',
+                    'Global JSON rules: All arrays MUST be arrays of strings; never arrays of objects. If you would produce an array of objects (e.g., name + description), use an object map of name -> string instead.',
+                    'Merge any explicit new values from the user with the last assistant proposal; prefer explicit user changes.',
+                    'No prose, no code fences.',
+                ].join('\n');
+                const windowTurns = await prisma_1.prisma.chatMessage.findMany({
+                    where: { chatId: params.chatId }, orderBy: { createdAt: 'desc' }, take: 40,
+                    select: { role: true, content: true },
+                }).catch(() => []);
+                const recent = (windowTurns || []).reverse().map(t => `${t.role}: ${(t.content || '').slice(0, 400)}`).join('\n').slice(0, 8000);
+                const usr = [`Message: ${body.message}`, recent ? `Recent chat:\n${recent}` : ''].filter(Boolean).join('\n');
+                const resp = await groq.chat.completions.create({
+                    model: 'llama-3.3-70b-versatile', temperature: 0,
+                    messages: [{ role: 'system', content: sys }, { role: 'user', content: usr }],
+                });
+                try {
+                    const parsed = JSON.parse(resp?.choices?.[0]?.message?.content || '{}');
+                    return parsed && typeof parsed === 'object' ? parsed : null;
+                }
+                catch {
+                    return null;
+                }
+            };
+            const deriveWorldFromConversation = async () => {
+                const sys = [
+                    'You are a helper that writes ONLY strict JSON for a World entry.',
+                    'Return ONLY a single JSON object with optional keys: { name, summary, traits }',
+                    'If the user indicates to "save", "apply", "commit", or "update" (synonyms), include ALL fields from the most recent assistant proposal, especially include full traits JSON. Do not omit traits.',
+                    'If the user does NOT indicate save/apply/commit/update, return an empty object: {}.',
+                    'Global JSON rules: All arrays MUST be arrays of strings; never arrays of objects. If you would produce an array of objects (e.g., name + description), use an object map of name -> string instead.',
+                    'Classification: Mechanics like magic, power, or energy systems belong to world traits. Do NOT treat these as project-level plot settings.',
+                    'Preserve complete descriptions verbatim. Do not summarize unless explicitly asked to summarize.',
+                    'Merge any explicit new values from the user with the last assistant proposal; prefer explicit user changes.',
+                    'No prose, no code fences.',
+                ].join('\n');
+                const windowTurns = await prisma_1.prisma.chatMessage.findMany({
+                    where: { chatId: params.chatId }, orderBy: { createdAt: 'desc' }, take: 40,
+                    select: { role: true, content: true },
+                }).catch(() => []);
+                const recent = (windowTurns || []).reverse().map(t => `${t.role}: ${(t.content || '').slice(0, 400)}`).join('\n').slice(0, 8000);
+                const usr = [`Message: ${body.message}`, recent ? `Recent chat:\n${recent}` : ''].filter(Boolean).join('\n');
+                const resp = await groq.chat.completions.create({
+                    model: 'llama-3.3-70b-versatile', temperature: 0,
+                    messages: [{ role: 'system', content: sys }, { role: 'user', content: usr }],
+                });
+                try {
+                    const parsed = JSON.parse(resp?.choices?.[0]?.message?.content || '{}');
+                    return parsed && typeof parsed === 'object' ? parsed : null;
+                }
+                catch {
+                    return null;
+                }
+            };
+            // Early handle character/world chats: derive + upsert or preview, only when user asks to save/apply/commit/update
+            const _raw = body.message.trim();
+            const _lower = _raw.toLowerCase();
+            const wantsEntitySave = /(save|apply|commit|update)\b/.test(_lower);
+            if (chatType === 'character' && wantsEntitySave) {
+                const draft = await deriveCharacterFromConversation();
+                if (draft && (draft.name || draft.summary || draft.role || draft.traits)) {
+                    if (clientMode === 'action') {
+                        // Upsert by name (case-insensitive)
+                        const fromUser = extractFirstJsonObject(body.message);
+                        const traitsFromUser = (fromUser && typeof fromUser === 'object')
+                            ? (isObj(fromUser.traits)
+                                ? fromUser.traits
+                                : (Array.isArray(fromUser)
+                                    ? null
+                                    : (!('id' in fromUser || 'name' in fromUser || 'role' in fromUser || 'summary' in fromUser || 'imageUrl' in fromUser)
+                                        ? fromUser
+                                        : null)))
+                            : null;
+                        const nameFromUser = typeof fromUser?.name === 'string' ? fromUser.name : undefined;
+                        const summaryFromUser = typeof fromUser?.summary === 'string' ? fromUser.summary : undefined;
+                        const name = (draft.name || nameFromUser || mentions.title || '').trim();
+                        let saved = null;
+                        if (name) {
+                            const existing = await prisma_1.prisma.character.findFirst({ where: { projectId: projectIdStr, name: { equals: name, mode: 'insensitive' } }, select: { id: true, traits: true } });
+                            if (existing) {
+                                const step1 = isObj(existing.traits) && isObj(draft.traits)
+                                    ? deepMerge(existing.traits, draft.traits)
+                                    : (isObj(existing.traits) ? existing.traits : (isObj(draft.traits) ? draft.traits : undefined));
+                                const mergedTraits = isObj(traitsFromUser) ? deepMerge(step1 || {}, traitsFromUser) : step1;
+                                saved = await prisma_1.prisma.character.update({
+                                    where: { id: existing.id },
+                                    data: {
+                                        name: name || undefined,
+                                        role: cleanStr(draft.role),
+                                        summary: cleanStr(draft.summary) ?? cleanStr(summaryFromUser) ?? undefined,
+                                        traits: mergedTraits,
+                                    },
+                                });
+                            }
+                            else {
+                                saved = await prisma_1.prisma.character.create({
+                                    data: {
+                                        projectId: projectIdStr,
+                                        name: name || 'Unnamed',
+                                        role: cleanStr(draft.role) ?? null,
+                                        summary: cleanStr(draft.summary) ?? cleanStr(summaryFromUser) ?? null,
+                                        traits: (() => {
+                                            let acc = {};
+                                            if (isObj(draft.traits))
+                                                acc = deepMerge(acc, draft.traits);
+                                            if (isObj(traitsFromUser))
+                                                acc = deepMerge(acc, traitsFromUser);
+                                            return Object.keys(acc).length ? acc : null;
+                                        })(),
+                                    },
+                                });
+                            }
+                            send({ action: 'upsert_character', item: { id: saved.id, name: saved.name, role: saved.role, summary: saved.summary, traits: saved.traits } });
+                            await persistAssistant(`Character updated: ${saved.name}${saved.role ? ` (${saved.role})` : ''}.`);
+                        }
+                        else {
+                            const hasJson = Boolean(extractFirstJsonObject(body.message));
+                            const msg = hasJson
+                                ? 'I detected character trait JSON. Which character should I apply this to? Mention @"Name".'
+                                : 'Character name is missing. Provide a name or include it in quotes like @"Name".';
+                            send({ type: 'text', content: msg });
+                            await persistAssistant(msg);
+                        }
+                    }
+                    else {
+                        const preview = Object.entries(draft).map(([k, v]) => `- ${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`).join('\n');
+                        send({ type: 'text', content: `Preview character (not applied in Chat mode):\n${preview}\n\nSwitch to Action mode to apply.` });
+                        await persistAssistant(`Preview character (not applied in Chat mode):\n${preview}\n\nSwitch to Action mode to apply.`);
+                    }
+                    send({ type: 'done' });
+                    reply.raw.end();
+                    return reply;
+                }
+            }
+            // If user pasted JSON in Character chat but didn't specify a target, prompt for it (non-save intent)
+            if (chatType === 'character' && !wantsEntitySave) {
+                const fromUser = extractFirstJsonObject(body.message);
+                const hasNameMention = Boolean(mentions.title) || /@\"([^\"]+)\"/.test(String(body.message));
+                if (isObj(fromUser) && !hasNameMention) {
+                    const msg = 'Detected character traits JSON. Which character should I apply this to? Mention @"Name". Switch to Action mode to apply.';
+                    send({ type: 'text', content: msg });
+                    await persistAssistant(msg);
+                    send({ type: 'done' });
+                    reply.raw.end();
+                    return reply;
+                }
+            }
+            // If user pasted JSON in World chat but didn't specify a target, prompt for it (non-save intent)
+            if (chatType === 'world' && !wantsEntitySave) {
+                const fromUser = extractFirstJsonObject(body.message);
+                const hasNameMention = Boolean(mentions.title) || /@\"([^\"]+)\"/.test(String(body.message));
+                if (isObj(fromUser) && !hasNameMention) {
+                    const msg = 'Detected world traits JSON. Which world should I apply this to? Mention @"Name". Switch to Action mode to apply.';
+                    send({ type: 'text', content: msg });
+                    await persistAssistant(msg);
+                    send({ type: 'done' });
+                    reply.raw.end();
+                    return reply;
+                }
+            }
+            if (chatType === 'world' && wantsEntitySave) {
+                const draft = await deriveWorldFromConversation();
+                if (draft && (draft.name || draft.summary || draft.traits)) {
+                    if (clientMode === 'action') {
+                        const fromUser = extractFirstJsonObject(body.message);
+                        const traitsFromUser = (fromUser && typeof fromUser === 'object')
+                            ? (isObj(fromUser.traits)
+                                ? fromUser.traits
+                                : (Array.isArray(fromUser)
+                                    ? null
+                                    : (!('id' in fromUser || 'name' in fromUser || 'summary' in fromUser || 'images' in fromUser)
+                                        ? fromUser
+                                        : null)))
+                            : null;
+                        const nameFromUser = typeof fromUser?.name === 'string' ? fromUser.name : undefined;
+                        const summaryFromUser = typeof fromUser?.summary === 'string' ? fromUser.summary : undefined;
+                        let fromAssistant = null;
+                        try {
+                            const recent = await prisma_1.prisma.chatMessage.findMany({
+                                where: { chatId: params.chatId, role: 'assistant' },
+                                orderBy: { createdAt: 'desc' },
+                                take: 10,
+                                select: { content: true },
+                            });
+                            for (const m of (recent || [])) {
+                                const parsed = extractFirstJsonObject(String(m.content || ''));
+                                if (parsed && typeof parsed === 'object') {
+                                    fromAssistant = parsed;
+                                    break;
+                                }
+                            }
+                        }
+                        catch { }
+                        const traitsFromAssistant = (fromAssistant && typeof fromAssistant === 'object')
+                            ? (isObj(fromAssistant.traits)
+                                ? fromAssistant.traits
+                                : (Array.isArray(fromAssistant)
+                                    ? null
+                                    : (!('id' in fromAssistant || 'name' in fromAssistant || 'summary' in fromAssistant || 'images' in fromAssistant)
+                                        ? fromAssistant
+                                        : null)))
+                            : null;
+                        const nameFromAssistant = typeof fromAssistant?.name === 'string' ? fromAssistant.name : undefined;
+                        let name = (draft.name || nameFromUser || nameFromAssistant || mentions.title || '').trim();
+                        if (!name) {
+                            // Try to infer world name from recent chat turns and @mentions
+                            const rawMsg = String(body.message || '');
+                            const mQ = /@"([^"]+)"/.exec(rawMsg);
+                            if (mQ?.[1])
+                                name = mQ[1].trim();
+                            if (!name) {
+                                const mAt = /@([A-Z][A-Za-z0-9_\-]{2,})/.exec(rawMsg);
+                                if (mAt?.[1])
+                                    name = mAt[1].trim();
+                            }
+                            const m1 = /\b([A-Z][A-Za-z0-9_\-]{2,})\s+world\b/.exec(rawMsg);
+                            const m2 = /\bworld\s+(?:named|called|of)\s+([A-Z][A-Za-z0-9_\-]{2,})\b/.exec(rawMsg);
+                            const m3 = /\bthe\s+([A-Z][A-Za-z0-9_\-]{2,})\s+world\b/.exec(rawMsg);
+                            name = (m1?.[1] || m2?.[1] || m3?.[1] || name || '').trim();
+                        }
+                        let saved = null;
+                        if (name) {
+                            const existing = await prisma_1.prisma.worldSetting.findFirst({ where: { projectId: projectIdStr, name: { equals: name, mode: 'insensitive' } }, select: { id: true, traits: true } });
+                            if (existing) {
+                                const step1 = isObj(existing.traits) && isObj(draft.traits)
+                                    ? deepMerge(existing.traits, draft.traits)
+                                    : (isObj(existing.traits) ? existing.traits : (isObj(draft.traits) ? draft.traits : undefined));
+                                const step2 = isObj(traitsFromUser) ? deepMerge(step1 || {}, traitsFromUser) : step1;
+                                const mergedTraits = isObj(traitsFromAssistant) ? deepMerge(step2 || {}, traitsFromAssistant) : step2;
+                                const normalized = normalizeWorldTraits(mergedTraits || {});
+                                saved = await prisma_1.prisma.worldSetting.update({
+                                    where: { id: existing.id },
+                                    data: {
+                                        name: name || undefined,
+                                        summary: cleanStr(draft.summary) ?? cleanStr(summaryFromUser) ?? cleanStr(fromAssistant?.summary) ?? undefined,
+                                        traits: normalized,
+                                    },
+                                });
+                            }
+                            else {
+                                saved = await prisma_1.prisma.worldSetting.create({
+                                    data: {
+                                        projectId: projectIdStr,
+                                        name: name || 'Untitled',
+                                        summary: cleanStr(draft.summary) ?? cleanStr(summaryFromUser) ?? cleanStr(fromAssistant?.summary) ?? null,
+                                        traits: (() => {
+                                            let acc = {};
+                                            if (isObj(draft.traits))
+                                                acc = deepMerge(acc, draft.traits);
+                                            if (isObj(traitsFromUser))
+                                                acc = deepMerge(acc, traitsFromUser);
+                                            if (isObj(traitsFromAssistant))
+                                                acc = deepMerge(acc, traitsFromAssistant);
+                                            const norm = normalizeWorldTraits(acc);
+                                            return Object.keys(norm).length ? norm : null;
+                                        })(),
+                                    },
+                                });
+                            }
+                            send({ action: 'upsert_world', item: { id: saved.id, name: saved.name, summary: saved.summary, traits: saved.traits } });
+                            await persistAssistant(`World entry updated: ${saved.name}.`);
+                        }
+                        else {
+                            const hasJson = Boolean(extractFirstJsonObject(body.message));
+                            const msg = hasJson
+                                ? 'I detected world traits JSON. Which world should I apply this to? Mention @"Name".'
+                                : 'World entry name is missing. Provide a name or include it in quotes like @"Name".';
+                            send({ type: 'text', content: msg });
+                            await persistAssistant(msg);
+                        }
+                    }
+                    else {
+                        const preview = Object.entries(draft).map(([k, v]) => `- ${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`).join('\n');
+                        send({ type: 'text', content: `Preview world entry (not applied in Chat mode):\n${preview}\n\nSwitch to Action mode to apply.` });
+                        await persistAssistant(`Preview world entry (not applied in Chat mode):\n${preview}\n\nSwitch to Action mode to apply.`);
+                    }
+                    send({ type: 'done' });
+                    reply.raw.end();
+                    return reply;
+                }
+            }
+            // Helper: derive settings changes from latest assistant response + recent chat window
+            const deriveSettingsFromConversation = async () => {
+                // Build a unified system prompt
+                const baseSystem = [
+                    'You are a helper that writes ONLY strict JSON for InkVerse settings.',
+                    'Output MUST be a single valid JSON object (no prose, no code fences).',
+                    'CRITICAL: Derive from BOTH the latest assistant response AND the recent chat transcript provided.',
+                    'Aggregate details across the whole window; ONLY prefer newer details when they conflict with older ones.',
+                    'Do not ask the user for JSON. Do not invent entities; omit unknowns.',
+                    'Global JSON rules: All arrays MUST be arrays of strings; never arrays of objects. If you would produce an array of objects (e.g., name + description), use an object map of name -> string instead.',
+                    'Schema (flexible):',
+                    '- Top-level keys (optional): "title", "description", "coverImage", "mode", "genres", "coreConflict", "settingsJson".',
+                    '- Put ALL other information under "settingsJson" using nested objects and arrays of strings only.',
+                    '- Plot-only scope: settingsJson MUST contain only plot-related structure such as: "plot", "beats", "acts", "actStructure", "outline", "themes", "tone", "logline", "summary", "notes", "arcs", "conflicts", "pace", "style", "setting", "characterDevelopment".',
+                    '- Allowed shapes for these keys: tone/themes/style/pace as array of short strings; plot as array of short strings or nested objects where any arrays are arrays of strings only; conflicts as object { internal, external, interpersonal } strings; setting as short descriptive string(s), not lists of world entities; characterDevelopment as short descriptive string.',
+                    '- ABSOLUTE FORBIDDANCE: Do NOT include character- or world-specific data in any form. Do NOT create keys like: "characters", "character", "cast", "world", "worlds", "regions", "cities", "locations", "factions", "species", "races", "images", "traits", "technology", "magicSystem", "geography".',
+                ].join('\n');
+                // Prefer the latest full assistant content (skip placeholders like [chapter draft ready])
+                let lastAssistantText = '';
+                try {
+                    const lastAList = await prisma_1.prisma.chatMessage.findMany({
+                        where: { chatId: params.chatId, role: 'assistant' },
+                        orderBy: { createdAt: 'desc' },
+                        take: 5,
+                        select: { content: true },
+                    });
+                    const pick = (lastAList || [])
+                        .map((m) => m.content || '')
+                        .find((t) => t && !/^\s*\[[^\]]+\]/.test(t) && t.length >= 120);
+                    lastAssistantText = (pick || lastAList?.[0]?.content || '').slice(0, 4000);
+                }
+                catch { }
+                // Recent chat window (bounded, expanded)
+                let recentChat = '';
+                try {
+                    const turns = await prisma_1.prisma.chatMessage.findMany({
+                        where: { chatId: params.chatId },
+                        orderBy: { createdAt: 'desc' },
+                        take: 100,
+                        select: { role: true, content: true },
+                    });
+                    const lines = turns
+                        .reverse()
+                        .map((t) => `${t.role}: ${(t.content || '').slice(0, 400)}`);
+                    recentChat = lines.join('\n').slice(0, 8000);
+                }
+                catch { }
+                // Rolling summary for long conversations
+                const rolling = await (0, memory_1.getSummary)(params.chatId).catch(() => '');
+                // Retrieve relevant past snippets (keywords for settings)
+                const rel = await (0, memory_1.retrieveRelevant)(params.chatId, 'settings world coreConflict genres title characters plot themes magicSystem technology rules city region', 8);
+                const relevantSnippets = (rel || []).map(r => `${r.role}: ${(r.content || '').slice(0, 400)}`).join('\n');
+                const makeDraftUser = (variantNote) => [
+                    variantNote ? `[INSTRUCTION VARIANT] ${variantNote}` : '',
+                    `Message: ${body.message}`,
+                    lastAssistantText ? `Recent assistant preview:\n${lastAssistantText}` : '',
+                    rolling ? `Context summary:\n${rolling}` : '',
+                    recentChat ? `Recent chat (window):\n${recentChat}` : '',
+                    relevantSnippets ? `Relevant past snippets:\n${relevantSnippets}` : '',
+                ].filter(Boolean).join('\n');
+                const normalize = (proposed) => {
+                    const changes = {};
+                    if (Array.isArray(proposed?.genres))
+                        changes.genres = proposed.genres;
+                    // worldName removed from Project; ignore any proposed world name at project level
+                    if (typeof proposed?.coreConflict === 'string')
+                        changes.coreConflict = proposed.coreConflict;
+                    if (typeof proposed?.title === 'string')
+                        changes.title = proposed.title;
+                    if (typeof proposed?.description === 'string')
+                        changes.description = proposed.description;
+                    if (typeof proposed?.coverImage === 'string')
+                        changes.coverImage = proposed.coverImage;
+                    if (typeof proposed?.mode === 'string' && ['novel', 'manhwa'].includes(proposed.mode))
+                        changes.mode = proposed.mode;
+                    if (proposed?.settingsJson && typeof proposed.settingsJson === 'object')
+                        changes.settingsJson = proposed.settingsJson;
+                    if (!changes.settingsJson && proposed?.settings && typeof proposed.settings === 'object')
+                        changes.settingsJson = proposed.settings;
+                    const reserved = new Set(['genres', 'worldName', 'world', 'coreConflict', 'title', 'description', 'coverImage', 'settingsJson', 'settings', 'mode']);
+                    for (const k of Object.keys(proposed || {})) {
+                        if (!reserved.has(k)) {
+                            (changes.settingsJson || (changes.settingsJson = {}));
+                            changes.settingsJson[k] = proposed[k];
+                        }
+                    }
+                    // Sanitize for plot-only chats: drop character/world-like keys from settingsJson
+                    if (chatType !== 'plot') {
+                        // Non-plot chats should not update project settings at all
+                        return null;
+                    }
+                    if (changes.settingsJson && typeof changes.settingsJson === 'object') {
+                        const allowedPlotKeys = new Set(['plot', 'beats', 'acts', 'actStructure', 'outline', 'themes', 'tone', 'logline', 'summary', 'notes', 'arcs', 'conflicts', 'pace', 'style', 'setting', 'characterDevelopment']);
+                        const sj = changes.settingsJson;
+                        for (const key of Object.keys(sj)) {
+                            if (!allowedPlotKeys.has(key))
+                                delete sj[key];
+                        }
+                        if (Object.keys(changes.settingsJson).length === 0)
+                            delete changes.settingsJson;
+                    }
+                    return Object.keys(changes).length > 0 ? changes : null;
+                };
+                const parseJsonFromText = (text) => {
+                    let s = (text || '').trim();
+                    // Strip markdown code fences if present
+                    if (s.startsWith('```')) {
+                        s = s.replace(/^```(?:json)?\s*/i, '');
+                        const end = s.lastIndexOf('```');
+                        if (end >= 0)
+                            s = s.slice(0, end);
+                        s = s.trim();
+                    }
+                    // Try direct parse
+                    try {
+                        return JSON.parse(s);
+                    }
+                    catch { }
+                    // Extract first balanced JSON object
+                    const extractBalanced = (src, openChar, closeChar) => {
+                        const start = src.indexOf(openChar);
+                        if (start < 0)
+                            return null;
+                        let depth = 0, inStr = false, esc = false;
+                        for (let i = start; i < src.length; i++) {
+                            const ch = src[i];
+                            if (inStr) {
+                                if (esc) {
+                                    esc = false;
+                                    continue;
+                                }
+                                if (ch === '\\') {
+                                    esc = true;
+                                    continue;
+                                }
+                                if (ch === '"')
+                                    inStr = false;
+                            }
+                            else {
+                                if (ch === '"')
+                                    inStr = true;
+                                else if (ch === openChar)
+                                    depth++;
+                                else if (ch === closeChar) {
+                                    depth--;
+                                    if (depth === 0)
+                                        return src.slice(start, i + 1);
+                                }
+                            }
+                        }
+                        return null;
+                    };
+                    const obj = extractBalanced(s, '{', '}');
+                    if (obj) {
+                        try {
+                            return JSON.parse(obj);
+                        }
+                        catch { }
+                    }
+                    // If response is an array, try to parse first object
+                    try {
+                        const arr = JSON.parse(s);
+                        if (Array.isArray(arr) && arr.length && typeof arr[0] === 'object')
+                            return arr[0];
+                    }
+                    catch { }
+                    return {};
+                };
+                const attempt = async (system, user) => {
+                    const resp = await groq.chat.completions.create({
+                        model: 'llama-3.3-70b-versatile',
+                        messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+                        temperature: 0,
+                    });
+                    const raw = resp?.choices?.[0]?.message?.content || '{}';
+                    const proposed = parseJsonFromText(raw);
+                    return normalize(proposed);
+                };
+                // Try once with base system
+                const first = await attempt(baseSystem, makeDraftUser('Use the provided context to produce settings.'));
+                if (first)
+                    return first;
+                // Retry with stricter formatting instruction
+                const strictSystem = baseSystem + '\nABSOLUTE REQUIREMENT: Return ONLY a single JSON object. No markdown, no code fences, no commentary.';
+                const second = await attempt(strictSystem, makeDraftUser('Return only JSON; aggregate details across all provided context.'));
+                if (second)
+                    return second;
+                // Heuristic fallback: extract from transcript when model fails
+                try {
+                    const transcript = [lastAssistantText, recentChat].filter(Boolean).join('\n\n');
+                    const lines = transcript.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+                    const txt = transcript;
+                    const changes = {};
+                    const sj = {};
+                    const grab = (re) => {
+                        const m = re.exec(txt);
+                        return m ? (m[1] || m[0]).trim() : '';
+                    };
+                    const grabLine = (label) => {
+                        const re = new RegExp(`^\s*${label}\s*[:\-]\s*(.+)$`, 'im');
+                        const m = re.exec(txt);
+                        return m ? m[1].trim() : '';
+                    };
+                    // Title
+                    const title1 = grabLine('Title');
+                    if (title1)
+                        changes.title = title1.replace(/^"|"$/g, '');
+                    // World / worldName
+                    const world1 = grabLine('World');
+                    if (world1)
+                        changes.worldName = world1.replace(/^"|"$/g, '');
+                    if (!changes.worldName) {
+                        const m = /(world|city|realm)\s+(?:called|named)\s+([A-Z][A-Za-z0-9'\- ]{2,50})/i.exec(txt);
+                        if (m)
+                            changes.worldName = m[2].trim();
+                    }
+                    // City
+                    const city1 = grabLine('City');
+                    if (city1)
+                        sj.city = city1.replace(/^"|"$/g, '');
+                    // Magic system
+                    const magic1 = grabLine('Magic system');
+                    if (magic1)
+                        sj.magicSystem = magic1;
+                    // Creatures
+                    const creatures1 = grabLine('Creatures');
+                    if (creatures1)
+                        sj.creatures = creatures1;
+                    // Politics
+                    const politics1 = grabLine('Politics');
+                    if (politics1)
+                        sj.politics = politics1;
+                    // Core conflict: look for explicit label, else X vs. Y
+                    const cc1 = grabLine('Core conflict');
+                    if (cc1)
+                        changes.coreConflict = cc1;
+                    if (!changes.coreConflict) {
+                        const m = /([A-Z][A-Za-z'\- ]{2,40})\s+vs\.\s+([A-Z][A-Za-z'\- ]{2,40})([^\n\r]*)/i.exec(txt);
+                        if (m)
+                            changes.coreConflict = `${m[1].trim()} vs. ${m[2].trim()}${m[3] ? m[3].trim() : ''}`.trim();
+                    }
+                    // Genres
+                    const genre1 = grabLine('Genre');
+                    if (genre1)
+                        changes.genres = [genre1];
+                    // Main Character block
+                    const mcName = grab(/\bName\s*[:\-]\s*([^\n\r*]+)/i);
+                    const mcAge = grab(/\bAge\s*[:\-]\s*(\d{1,3})/i);
+                    const mcOcc = grab(/\bOccupation\s*[:\-]\s*([^\n\r*]+)/i);
+                    if (mcName || mcAge || mcOcc) {
+                        sj.mainCharacter = {};
+                        if (mcName)
+                            sj.mainCharacter.name = mcName;
+                        if (mcAge)
+                            sj.mainCharacter.age = Number(mcAge);
+                        if (mcOcc)
+                            sj.mainCharacter.occupation = mcOcc;
+                    }
+                    if (Object.keys(sj).length)
+                        changes.settingsJson = sj;
+                    return Object.keys(changes).length ? changes : null;
+                }
+                catch {
+                    return null;
+                }
+            };
+            // AI Intent Classification (non-streamed, strict JSON)
+            try {
+                const summaryForCls = await (0, memory_1.getSummary)(params.chatId);
+                const clsSystem = [
+                    'You are an intent classifier for InkVerse chat. Return ONLY strict JSON.',
+                    'Schema: { "action": "set_settings|create_chapter|convert_to_manhwa|update_chapter|generate_character_image|none", "args": object|null, "confidence": number }',
+                    'Rules:',
+                    '- set_settings when user wants to update settings (e.g., genres, coreConflict, settingsJson). Treat synonyms like "save", "apply", "commit", or "update" (even without explicit field names) as set_settings if recent assistant output proposed settings.',
+                    '- create_chapter when user asks to write/draft/create a chapter.',
+                    '- update_chapter when user asks to rewrite/revise/edit an existing chapter. args can include { chapter_number?: number, title?: string }',
+                    '- convert_to_manhwa when user asks to convert text into panel script or generate panels.',
+                    '- generate_character_image when the user asks to generate or create an image for a character. args can include { name?: string, description?: string }.',
+                    '- none otherwise.',
+                    'Return only JSON, no prose.'
+                ].join('\n');
+                const clsUser = [
+                    `Message: ${body.message}`,
+                    summaryForCls ? `Context summary: ${summaryForCls}` : '',
+                ].filter(Boolean).join('\n');
+                const clsResp = await groq.chat.completions.create({
+                    model: 'llama-3.3-70b-versatile',
+                    messages: [{ role: 'system', content: clsSystem }, { role: 'user', content: clsUser }],
+                    temperature: 0,
+                });
+                const raw = clsResp?.choices?.[0]?.message?.content || '{}';
+                let parsed = {};
+                try {
+                    parsed = JSON.parse(raw);
+                }
+                catch { }
+                const action = String(parsed?.action || 'none');
+                const confidence = Number(parsed?.confidence ?? 0);
+                if (confidence >= 0.6) {
+                    if (action === 'set_settings') {
+                        if (chatType === 'plot') {
+                            const changes = await deriveSettingsFromConversation();
+                            if (changes) {
+                                if (clientMode === 'action') {
+                                    send({ action: 'confirm_settings', changes });
+                                    const preview = Object.entries(changes).map(([k, v]) => `- ${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`).join('\n');
+                                    await persistAssistant(`Proposed settings (confirm to apply):\n${preview}`);
+                                }
+                                else {
+                                    const preview = Object.entries(changes).map(([k, v]) => `- ${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`).join('\n');
+                                    send({ type: 'text', content: `Preview settings (not applied in Chat mode):\n${preview}\n\nSwitch to Action mode to apply.` });
+                                    await persistAssistant(`Preview settings (not applied in Chat mode):\n${preview}\n\nSwitch to Action mode to apply.`);
+                                }
+                                send({ type: 'done' });
+                                reply.raw.end();
+                                return reply;
+                            }
+                        }
+                        // If not plot chat, ignore this classifier result and continue with world/character handling
+                    }
+                    if (action === 'convert_to_manhwa') {
+                        if (chatType === 'plot') {
+                            intent = 'convert_to_manhwa';
+                            intentArgs = {};
+                        }
+                        else {
+                            const msg = 'Warning: This is a ' + chatType + ' chat. Chapter/panel work is forbidden here. Open a Plot chat to proceed.';
+                            send({ type: 'text', content: msg });
+                            await persistAssistant(msg);
+                        }
+                    }
+                    if (action === 'update_chapter') {
+                        if (chatType === 'plot') {
+                            intent = 'update_chapter';
+                            intentArgs = {};
+                        }
+                        else {
+                            const msg = 'Warning: This is a ' + chatType + ' chat. Chapter edits are forbidden here. Open a Plot chat to proceed.';
+                            send({ type: 'text', content: msg });
+                            await persistAssistant(msg);
+                        }
+                    }
+                    if (action === 'create_chapter') {
+                        if (chatType === 'plot') {
+                            intent = 'create_chapter';
+                            intentArgs = {};
+                        }
+                        else {
+                            const msg = 'Warning: This is a ' + chatType + ' chat. Chapter creation is forbidden here. Open a Plot chat to proceed.';
+                            send({ type: 'text', content: msg });
+                            await persistAssistant(msg);
+                        }
+                    }
+                    if (action === 'generate_character_image') {
+                        if (chatType !== 'character') {
+                            const msg = 'Image generation is restricted to Character chats.';
+                            send({ type: 'text', content: msg });
+                            await persistAssistant(msg);
+                        }
+                        else if (clientMode !== 'action') {
+                            const msg = 'Switch to Action mode to generate character images.';
+                            send({ type: 'text', content: msg });
+                            await persistAssistant(msg);
+                        }
+                        else {
+                            try {
+                                const args = (parsed?.args || {});
+                                let name = (args.name || mentions.title || '').trim();
+                                if (!name) {
+                                    const m = /@"([^"]+)"/.exec(String(body.message));
+                                    if (m?.[1])
+                                        name = m[1].trim();
+                                }
+                                if (!name) {
+                                    const msg = 'Provide a character name with @"Name" to generate an image.';
+                                    send({ type: 'text', content: msg });
+                                    await persistAssistant(msg);
+                                }
+                                else {
+                                    const target = await prisma_1.prisma.character.findFirst({ where: { projectId: projectIdStr, name: { equals: name, mode: 'insensitive' } }, select: { id: true, images: true, imageUrl: true } });
+                                    if (!target) {
+                                        const msg = `Character not found: ${name}. Create it first or check spelling.`;
+                                        send({ type: 'text', content: msg });
+                                        await persistAssistant(msg);
+                                    }
+                                    else {
+                                        const description = String(args.description || body.message).slice(0, 500);
+                                        const url = await (0, fal_1.generateImage)(description, {});
+                                        try {
+                                            const current = Array.isArray(target.images) ? target.images : [];
+                                            const next = [...current, url];
+                                            await prisma_1.prisma.character.update({ where: { id: target.id }, data: { images: next, imageUrl: target.imageUrl || url } });
+                                        }
+                                        catch { }
+                                        await prisma_1.prisma.chatMessage.create({ data: { chatId: params.chatId, role: 'assistant', content: url, panelId: null } });
+                                        send({ type: 'image', url });
+                                        send({ type: 'done' });
+                                        reply.raw.end();
+                                        return reply;
+                                    }
+                                }
+                            }
+                            catch (e) {
+                                const msg = e?.message || 'Image generation failed';
+                                send({ type: 'error', message: msg });
+                                await persistAssistant(`Error: ${msg}`);
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+            // Save-previous-draft (pre-stream): user switches to Action mode and says "save the chapter"
+            try {
+                const raw = body.message.trim();
+                const lower = raw.toLowerCase();
+                const wantsSaveDraft = /(save|persist|apply|commit)\b/.test(lower) && /(chapter|draft|scene|it|this)\b/.test(lower);
+                if (wantsSaveDraft) {
+                    if (chatType !== 'plot') {
+                        const msg = 'Warning: This is a ' + chatType + ' chat. Saving chapters is forbidden here. Open a Plot chat to proceed.';
+                        send({ type: 'text', content: msg });
+                        await persistAssistant(msg);
+                        send({ type: 'done' });
+                        reply.raw.end();
+                        return reply;
+                    }
+                    const draft = await (0, memory_1.getLastAssistantDraft)(params.chatId);
+                    if (!draft) {
+                        if ((body.clientMode === 'action')) {
+                            send({ type: 'text', content: 'No prior chapter draft found to save.' });
+                            await persistAssistant('No prior chapter draft found to save.');
+                        }
+                        else {
+                            const txt = 'No prior chapter draft found. Ask me to write a chapter first in Chat mode, then switch to Action mode and say "save the chapter".';
+                            send({ type: 'text', content: txt });
+                            await persistAssistant(txt);
+                        }
+                        send({ type: 'done' });
+                        reply.raw.end();
+                        return reply;
+                    }
+                    let chapterNumber = (typeof mentions.chapter_number === 'number' ? mentions.chapter_number : undefined);
+                    let chapterTitle = (typeof mentions.title === 'string' ? mentions.title : undefined);
+                    if (!chapterNumber || !chapterTitle) {
+                        try {
+                            const recentUsers = await prisma_1.prisma.chatMessage.findMany({
+                                where: { chatId: params.chatId, role: 'user' },
+                                orderBy: { createdAt: 'desc' },
+                                take: 30,
+                                select: { content: true },
+                            });
+                            for (const u of recentUsers) {
+                                const src = (u.content || '').trim();
+                                const m = /(write|draft|create)\s+chapter(?:\s+(\d+))?[:\-\s]*([^\n\r]*)/i.exec(src);
+                                if (m) {
+                                    if (!chapterNumber && m[2])
+                                        chapterNumber = parseInt(m[2], 10);
+                                    const t = (m[3] || '').trim().replace(/^"|"$/g, '');
+                                    if (!chapterTitle && t)
+                                        chapterTitle = t;
+                                    break;
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                    if (!chapterTitle) {
+                        const header = draft.split('\n').slice(0, 5).join(' ');
+                        const h1 = /^#\s+(.+?)\s*$/.exec(draft.split('\n')[0] || '');
+                        if (h1?.[1])
+                            chapterTitle = h1[1].trim();
+                        if (!chapterTitle) {
+                            const ch = /chapter\s+(\d+)[\s:—-]*([^\n\r]*)/i.exec(header);
+                            if (ch) {
+                                if (!chapterNumber && ch[1])
+                                    chapterNumber = parseInt(ch[1], 10);
+                                const rest = (ch[2] || '').trim();
+                                if (rest)
+                                    chapterTitle = rest.replace(/^"|"$/g, '');
+                            }
+                        }
+                    }
+                    if (!chapterTitle && chapterNumber)
+                        chapterTitle = `Chapter ${chapterNumber}`;
+                    if (!chapterTitle)
+                        chapterTitle = 'Untitled Chapter';
+                    // Resolve existing chapter by number (index) or exact title match
+                    let targetId;
+                    try {
+                        const chapters = await prisma_1.prisma.chapter.findMany({
+                            where: { projectId: projectIdStr },
+                            orderBy: { createdAt: 'asc' },
+                            select: { id: true, title: true },
+                        });
+                        if (typeof chapterNumber === 'number' && chapterNumber >= 1 && chapters[chapterNumber - 1]) {
+                            targetId = chapters[chapterNumber - 1].id;
+                        }
+                        if (!targetId && chapterTitle) {
+                            const lc = chapterTitle.toLowerCase();
+                            const m = chapters.find(c => (c.title || '').toLowerCase() === lc);
+                            if (m)
+                                targetId = m.id;
+                        }
+                    }
+                    catch { }
+                    const clientMode = (body.clientMode === 'action' ? 'action' : 'chat');
+                    // Try to refine the draft by matching embeddings with chapter number/title
+                    let matchedDraft = draft;
+                    try {
+                        const terms = [];
+                        if (typeof chapterNumber === 'number')
+                            terms.push(`chapter ${chapterNumber}`);
+                        if (chapterTitle)
+                            terms.push(chapterTitle);
+                        if (terms.length) {
+                            const likeConds = terms.map((_, i) => `content ilike $${i + 3}`).join(' or ');
+                            const sqlParams = [params.chatId, 3, ...terms.map((t) => `%${t}%`)];
+                            const rows = await prisma_1.prisma.$queryRawUnsafe(`select content from public.chat_embeddings where chat_id = $1::uuid and role = 'assistant' and (${likeConds}) order by created_at desc limit $2::int`, ...sqlParams);
+                            const pick = (rows || [])
+                                .map((r) => String(r.content || ''))
+                                .find((t) => t && t.length >= 300 && !/^\[[^\]]+\]/.test(t));
+                            if (pick)
+                                matchedDraft = pick;
+                        }
+                    }
+                    catch { }
+                    // Sanitize: strip any leading [MODE] tag accidentally included in content
+                    try {
+                        matchedDraft = (matchedDraft || '').replace(/^\s*\[MODE\][^\n]*\n?/i, '').trim();
+                    }
+                    catch { }
+                    if (clientMode === 'action') {
+                        // Persist to DB immediately for reliability
+                        try {
+                            if (targetId) {
+                                await prisma_1.prisma.chapter.update({ where: { id: targetId }, data: { title: chapterTitle, content: matchedDraft } });
+                                send({ action: 'update_chapter', id: targetId, chapter_number: chapterNumber, title: chapterTitle, content: matchedDraft });
+                                await persistAssistant(`Updated chapter${chapterNumber ? ` ${chapterNumber}` : ''}${chapterTitle ? `: "${chapterTitle}"` : ''}.`);
+                            }
+                            else {
+                                const created = await prisma_1.prisma.chapter.create({ data: { projectId: projectIdStr, title: chapterTitle, content: matchedDraft } });
+                                send({ action: 'create_chapter', id: created.id, title: chapterTitle, content: matchedDraft, chapter_number: chapterNumber });
+                                await persistAssistant(`Created chapter${chapterNumber ? ` ${chapterNumber}` : ''}${chapterTitle ? `: "${chapterTitle}"` : ''}.`);
+                            }
+                        }
+                        catch (e) {
+                            send({ type: 'error', message: e?.message || 'Failed to persist chapter' });
+                            await persistAssistant(`Error: ${e?.message || 'Failed to persist chapter'}`);
+                        }
+                    }
+                    else {
+                        const op = targetId ? 'update' : 'create';
+                        const preview = `Will ${op} ${chapterNumber ? `Chapter ${chapterNumber}` : 'a chapter'}${chapterTitle ? ` titled \"${chapterTitle}\"` : ''} from the prior draft. Switch to Action mode to apply.`;
+                        send({ type: 'text', content: preview });
+                        await persistAssistant(preview);
+                    }
+                    send({ type: 'done' });
+                    reply.raw.end();
+                    return reply;
+                }
+            }
+            catch { }
+            // Save settings request: generate structured JSON from conversation (no user JSON required)
+            try {
+                const rawText = body.message.trim();
+                const wantsSave = /\b(save|set)\b.*\b(settings)\b/i.test(rawText) || /\bset\s+current\s+settings\b/i.test(rawText) || /\bgenerate\b.*\bsettings\b/i.test(rawText);
+                if (wantsSave) {
+                    const changes = await deriveSettingsFromConversation();
+                    if (changes) {
+                        if (clientMode === 'action') {
+                            send({ action: 'confirm_settings', changes });
+                        }
+                        else {
+                            const preview = Object.entries(changes).map(([k, v]) => `- ${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`).join('\n');
+                            send({ type: 'text', content: `Preview settings (not applied in Chat mode):\n${preview}\n\nSwitch to Action mode to apply.` });
+                        }
+                        send({ type: 'done' });
+                        reply.raw.end();
+                        return reply;
+                    }
+                    send({ type: 'error', message: 'Failed to derive settings from recent conversation.' });
+                    send({ type: 'done' });
+                    reply.raw.end();
+                    return reply;
+                }
+            }
+            catch { }
+            // Lightweight intent detection
+            const rawMsg = body.message.trim();
+            const msg = rawMsg.toLowerCase();
+            const regexConvert = /(convert\s+chapter|generate\s+panels|panel\s+script)/i.test(msg);
+            const regexWrite = /\b(write|draft|create)\s+(?:\w+\s+)?chapter\b/i.test(rawMsg);
+            const regexRewrite = /\b(rewrite|revise|edit)\s+(?:the\s+)?chapter\b/i.test(rawMsg);
+            const isConvert = intent === 'convert_to_manhwa' || regexConvert;
+            const isWriteChapter = intent === 'create_chapter' || regexWrite;
+            const isUpdateChapter = intent === 'update_chapter' || regexRewrite;
+            // Build prioritized context with DB truth (settings), target chapter (full), other chapters (summaries), then chat
+            // Prepare chapters
+            const chapters = await prisma_1.prisma.chapter.findMany({
+                where: { projectId: projectIdStr },
+                orderBy: { createdAt: 'asc' },
+                select: { id: true, title: true, content: true, createdAt: true },
+            });
+            const resolveByNumber = (n) => {
+                if (!n || n < 1)
+                    return null;
+                return chapters[n - 1] || null;
+            };
+            const resolveByTitle = (t) => {
+                if (!t)
+                    return null;
+                const lc = t.trim().toLowerCase();
+                return chapters.find(c => (c.title || '').toLowerCase() === lc) || null;
+            };
+            const target = resolveByNumber(mentions.chapter_number ?? null) || resolveByTitle(mentions.title ?? null) || null;
+            const summarize = (txt, max = 600) => {
+                const t = (txt || '').replace(/\s+/g, ' ').trim();
+                if (!t)
+                    return '';
+                return t.length <= max ? t : t.slice(0, max) + '…';
+            };
+            const basePrompt = await (0, groq_1.buildSystemPromptForChat)(projectIdStr, chatType);
+            const rolling = await (0, memory_1.getSummary)(params.chatId);
+            const ctxParts = [];
+            const jsonBlocks = [];
+            // In plot chats, detect referenced characters/world and inject only their full JSON
+            if (chatType === 'plot') {
+                const win = await prisma_1.prisma.chatMessage.findMany({
+                    where: { chatId: params.chatId }, orderBy: { createdAt: 'desc' }, take: 20,
+                    select: { role: true, content: true },
+                }).catch(() => []);
+                const transcript = (win || []).reverse().map(t => `${t.role}: ${(t.content || '').slice(0, 400)}`).join('\n').slice(0, 8000);
+                const sys = [
+                    'Extract referenced entity names from the prompt and short transcript.',
+                    'Return ONLY JSON object: { "characters": string[], "world": string[] }',
+                    'Rules: list names explicitly mentioned or clearly implied targets. No prose, no code fences.',
+                ].join('\n');
+                const usr = [`Prompt: ${body.message}`, transcript ? `Transcript:\n${transcript}` : ''].filter(Boolean).join('\n');
+                let refNames = { characters: [], world: [] };
+                try {
+                    const resp = await groq.chat.completions.create({
+                        model: 'llama-3.3-70b-versatile', temperature: 0,
+                        messages: [{ role: 'system', content: sys }, { role: 'user', content: usr }],
+                    });
+                    const txt = resp?.choices?.[0]?.message?.content || '{}';
+                    const parsed = JSON.parse(txt);
+                    if (parsed && typeof parsed === 'object') {
+                        refNames.characters = Array.isArray(parsed.characters) ? parsed.characters.filter((s) => typeof s === 'string') : [];
+                        refNames.world = Array.isArray(parsed.world) ? parsed.world.filter((s) => typeof s === 'string') : [];
+                    }
+                }
+                catch { }
+                // Resolve to DB entries (case-insensitive by name)
+                const pickUnique = (arr) => {
+                    const seen = new Set();
+                    const out = [];
+                    for (const it of arr) {
+                        if (!seen.has(it.id)) {
+                            seen.add(it.id);
+                            out.push(it);
+                        }
+                    }
+                    return out;
+                };
+                const selChars = [];
+                for (const nm of (refNames.characters || []).slice(0, 8)) {
+                    const name = String(nm || '').trim();
+                    if (!name)
+                        continue;
+                    const found = await prisma_1.prisma.character.findFirst({
+                        where: { projectId: projectIdStr, name: { equals: name, mode: 'insensitive' } },
+                        select: { id: true, name: true, role: true, summary: true, traits: true, imageUrl: true },
+                    }).catch(() => null);
+                    if (found)
+                        selChars.push(found);
+                }
+                const selWorld = [];
+                for (const nm of (refNames.world || []).slice(0, 8)) {
+                    const name = String(nm || '').trim();
+                    if (!name)
+                        continue;
+                    const found = await prisma_1.prisma.worldSetting.findFirst({
+                        where: { projectId: projectIdStr, name: { equals: name, mode: 'insensitive' } },
+                        select: { id: true, name: true, summary: true, traits: true, images: true },
+                    }).catch(() => null);
+                    if (found)
+                        selWorld.push(found);
+                }
+                const uniqChars = pickUnique(selChars);
+                const uniqWorld = pickUnique(selWorld);
+                if (uniqChars.length)
+                    jsonBlocks.push(`[CHARACTERS JSON]\n${JSON.stringify(uniqChars).slice(0, 120000)}`);
+                if (uniqWorld.length)
+                    jsonBlocks.push(`[WORLD JSON]\n${JSON.stringify(uniqWorld).slice(0, 120000)}`);
+            }
+            ctxParts.push('CONTEXT PRIORITY: DB truth (settings, chapters list) is authoritative. Use DB truth and explicit mentions over chat. Do NOT perform writes unless clientMode=action. Do NOT claim a chapter exists/saved unless it appears in the DB chapters list below.');
+            ctxParts.push(`[MODE] ${clientMode}`);
+            ctxParts.push(`[DB CHAPTERS COUNT] ${chapters.length}`);
+            if (chapters.length) {
+                ctxParts.push('[DB CHAPTERS]');
+                chapters.forEach((c, i) => {
+                    ctxParts.push(`- ${i + 1}. ${c.title || 'Untitled'}`);
+                });
+            }
+            ctxParts.push('REPORTING RULE: When asked how many chapters are written/saved, answer EXACTLY with the number in [DB CHAPTERS COUNT]. When listing saved chapters, use [DB CHAPTERS]. Do NOT count drafts discussed in chat unless they appear in the DB list.');
+            if (target) {
+                ctxParts.push('[TARGET CHAPTER FULL]');
+                ctxParts.push(`title=${target.title || 'Untitled'}`);
+                ctxParts.push(`content=\n${(target.content || '').slice(0, 8000)}`);
+            }
+            if (chapters.length) {
+                ctxParts.push('[OTHER CHAPTERS SUMMARY]');
+                for (const c of chapters) {
+                    if (target && c.id === target.id)
+                        continue;
+                    ctxParts.push(`- ${c.title || 'Untitled'}: ${summarize(c.content)}`);
+                }
+            }
+            const systemPrompt = (rolling ? `${basePrompt}\n\nContext Summary (rolling):\n${rolling}` : basePrompt)
+                + (jsonBlocks.length ? `\n\n${jsonBlocks.join('\n\n')}` : '')
+                + `\n\n[CHAT TYPE] ${chatType}\n${ctxParts.join('\n')}`;
+            // Short-term memory: load last 20 messages as context
+            const history = await prisma_1.prisma.chatMessage.findMany({
+                where: { chatId: params.chatId },
+                orderBy: { createdAt: 'asc' },
+                take: 20,
+                select: { role: true, content: true },
+            });
+            // Retrieval: pull top relevant past turns from Supabase (keyword/pgvector fallback)
+            const relevant = await (0, memory_1.retrieveRelevant)(params.chatId, body.message, 5);
+            const groqMessages = [
+                { role: 'system', content: systemPrompt },
+                // Map DB roles to Groq roles
+                ...history.map((m) => ({ role: (m.role === 'assistant' ? 'assistant' : 'user'), content: m.content })),
+                // Add retrieved relevant snippets (dedup naturally by model input)
+                ...relevant.map((m) => ({ role: m.role, content: m.content })),
+                { role: 'user', content: body.message },
+            ];
+            const stream = await groq.chat.completions.create({
+                model: 'llama-3.3-70b-versatile',
+                messages: groqMessages,
+                stream: true,
+                temperature: 0.7,
+            });
+            let assistantText = '';
+            for await (const chunk of stream) {
+                const delta = chunk.choices?.[0]?.delta?.content || '';
+                if (!delta)
+                    continue;
+                assistantText += delta;
+                // Only stream text to chat when not creating/convert action (classifier intent takes precedence)
+                if (clientMode !== 'action' || (!isWriteChapter && !isConvert && !isUpdateChapter)) {
+                    send({ type: 'text', content: delta });
+                }
+            }
+            const assistantMsg = await prisma_1.prisma.chatMessage.create({
+                data: {
+                    chatId: params.chatId,
+                    role: 'assistant',
+                    // Store full text only if it was conversational; otherwise keep a short summary
+                    content: (isWriteChapter || isConvert || isUpdateChapter)
+                        ? (isConvert ? '[convert_to_manhwa proposal ready]' : (isWriteChapter ? '[chapter draft ready]' : '[chapter rewrite ready]'))
+                        : assistantText,
+                    panelId: body.regeneratePanelId ?? null,
+                },
+            });
+            // Save assistant text to long-term memory (store actual text, not placeholder)
+            void (0, memory_1.saveChatMemory)(params.chatId, 'assistant', assistantText);
+            // Structured action event
+            if (isConvert) {
+                // Send a conversion action; client can persist panel_script accordingly
+                if (clientMode === 'action') {
+                    send({ action: 'convert_to_manhwa', panel_script: assistantText });
+                }
+            }
+            else if (isWriteChapter) {
+                // Novel chapter creation requested
+                const m = /write\s+chapter(?:\s+(\d+))?[:\-\s]*(.*)$/i.exec(rawMsg);
+                const chNum = m?.[1];
+                const rest = (m?.[2] || '').trim();
+                const inferred = rest || (chNum ? `Chapter ${chNum}` : (mentions.chapter_number ? `Chapter ${mentions.chapter_number}` : 'Untitled Chapter'));
+                if (clientMode === 'action') {
+                    send({ action: 'create_chapter', title: inferred, content: assistantText });
+                }
+            }
+            else if (isUpdateChapter) {
+                // Try to infer chapter number or title from the prompt
+                let chapterNumber;
+                let chapterTitle;
+                const mNum = /(rewrite|revise|edit)\s+(?:the\s+)?chapter\s+(\d+)/i.exec(rawMsg);
+                if (mNum?.[2])
+                    chapterNumber = parseInt(mNum[2], 10);
+                const mTitle = /"([^"]+)"/.exec(rawMsg);
+                if (mTitle?.[1])
+                    chapterTitle = mTitle[1];
+                if (!chapterNumber && mentions.chapter_number)
+                    chapterNumber = mentions.chapter_number;
+                if (!chapterTitle && mentions.title)
+                    chapterTitle = mentions.title;
+                if (clientMode === 'action') {
+                    send({ action: 'update_chapter', chapter_number: chapterNumber, title: chapterTitle, content: assistantText });
+                }
+            }
+            if (body.regeneratePanelId) {
+                const url = process.env.UPSTASH_REDIS_URL || '';
+                if (url) {
+                    const connection = new ioredis_1.default(url, { tls: url.startsWith('rediss://') ? {} : undefined });
+                    const queue = new bullmq_1.Queue('image-generation', { connection });
+                    await queue.add('generate', {
+                        projectId: projectIdStr,
+                        panelId: body.regeneratePanelId,
+                        prompt: assistantText,
+                        userId: user.id,
+                    });
+                    send({ type: 'image_job', status: 'queued', panelId: body.regeneratePanelId });
+                }
+            }
+            send({ type: 'done', messageId: assistantMsg.id });
+            // Award EXP for chat interaction
+            try {
+                await (0, expAwarder_1.awardExpForAction)(user.id, 'CHAT_MESSAGE');
+            }
+            catch (err) {
+                req.log.warn({ err }, 'Failed to award EXP for chat message');
+            }
+            reply.raw.end();
+        }
+        catch (err) {
+            send({ type: 'error', message: err?.message || 'Unexpected error' });
+            reply.raw.end();
+        }
+        return reply; // keep Fastify happy
+    });
+    done();
+};
+exports.default = chatRoutes;
+//# sourceMappingURL=chat.js.map

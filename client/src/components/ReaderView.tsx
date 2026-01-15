@@ -64,6 +64,7 @@ export function ReaderView({
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState<number | null>(null);
   const { isDark } = useTheme();
+  const [unlockTarget, setUnlockTarget] = useState<{ id: string; price: number } | null>(null);
 
   // Paginated load of chapters
   useEffect(() => {
@@ -166,6 +167,16 @@ export function ReaderView({
 
     if (mode === 'novel') {
       const ch = chapters[index];
+      if (ch.content === 'LOCKED_CONTENT' && (ch as any).price > 0) {
+        return (
+          <div style={style}>
+            <div ref={wrapperRef}>
+               <h3 className="px-4 pt-6 text-xl font-semibold mb-2">{ch?.title}</h3>
+               <LockedChapterPlaceholder price={(ch as any).price} onUnlock={() => setUnlockTarget({ id: ch.id, price: (ch as any).price })} />
+            </div>
+          </div>
+        );
+      }
       return (
         <div style={style}>
           <div ref={wrapperRef} className="px-4 py-6">
@@ -175,6 +186,18 @@ export function ReaderView({
         </div>
       );
     } else {
+      // For Manhwa, we might have multiple images per chapter. 
+      // How do we handle locked chapters here? 
+      // Since 'images' array is derived from chapters, if a chapter is locked, its images won't be in the list?
+      // Wait, 'images' is a flat list of URL strings.
+      // If a chapter is locked, the API sends content="LOCKED_CONTENT" and panelScript=null.
+      // So 'images' list will be empty for that chapter.
+      // We need a way to insert a 'Locked' item into the list.
+
+      // Quick Fix: For Manhwa, ReaderView structure assumes a flat list of images.
+      // If we want to support locking, we really need to render 'Chapters' not just 'Images'.
+      // But currently Manhwa mode flattens everything.
+      
       const src = images[index];
       const onImgLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
         const img = e.currentTarget;
@@ -501,6 +524,43 @@ export function ReaderView({
           )}
         </AutoSizer>
       </div>
+      {/* Unlock Dialog */}
+      {unlockTarget && (
+        <UnlockModal
+          chapterId={unlockTarget.id}
+          cost={unlockTarget.price}
+          onUnlock={() => {
+            setUnlockTarget(null);
+            // Reload to get unmasked content
+            window.location.reload(); 
+          }}
+          onCancel={() => setUnlockTarget(null)}
+        />
+      )}
     </div>
   );
 }
+
+// Helper to render locked state
+function LockedChapterPlaceholder({ price, onUnlock }: { price: number; onUnlock: () => void }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-20 px-6 bg-slate-900/50 rounded-xl border border-slate-700/50 mx-4 my-8">
+      <div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mb-4 text-cyan-400">
+        <Lock size={32} />
+      </div>
+      <h3 className="text-xl font-bold text-white mb-2">Premium Chapter</h3>
+      <p className="text-slate-400 text-center max-w-md mb-6">
+        This chapter is locked. Support the author to continue reading.
+      </p>
+      <button
+        onClick={onUnlock}
+        className="px-6 py-3 bg-cyan-400 hover:bg-cyan-300 text-black font-bold rounded-lg flex items-center gap-2 transition"
+      >
+        <Lock size={16} /> Unlock for {price} Coins
+      </button>
+    </div>
+  );
+}
+
+import UnlockModal from './monetization/UnlockModal';
+import { Lock } from 'lucide-react';

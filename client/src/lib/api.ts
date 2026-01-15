@@ -78,13 +78,14 @@ export function createApi(supabase: SupabaseClient) {
     unpublishProject: (id: string) =>
       apiFetch<{ id: string; visibility: 'public'|'private'; publicSlug?: string|null; publishedAt?: string|null }>(supabase, `/api/project/${id}/share/unpublish`, { method: 'POST' }),
 
-    // Public read APIs (no auth required)
+    // Public read APIs (no auth required, but sends token if available for ownership/unlock checks)
     getPublicProject: (slug: string) =>
-      publicApiFetch<any>(`/api/public/project/${encodeURIComponent(slug)}`),
+      apiFetch<any>(supabase, `/api/public/project/${encodeURIComponent(slug)}`),
     getPublicChapters: (slug: string, page: number, limit: number) =>
-      publicApiFetch<{ items: any[]; total: number }>(`/api/public/project/${encodeURIComponent(slug)}/chapters?page=${encodeURIComponent(page)}&limit=${encodeURIComponent(limit)}`),
+      apiFetch<{ items: any[]; total: number }>(supabase, `/api/public/project/${encodeURIComponent(slug)}/chapters?page=${encodeURIComponent(page)}&limit=${encodeURIComponent(limit)}`),
     getPublicProjects: (page: number, limit: number, q?: string) =>
-      publicApiFetch<{ items: any[]; total: number }>(
+      apiFetch<{ items: any[]; total: number }>(
+        supabase,
         `/api/public/projects?page=${encodeURIComponent(page)}&limit=${encodeURIComponent(limit)}${q ? `&q=${encodeURIComponent(q)}` : ''}`
       ),
 
@@ -123,7 +124,7 @@ export function createApi(supabase: SupabaseClient) {
     updateChapter: (
       projectId: string,
       chapterId: string,
-      payload: { title?: string; content?: string; panel_script?: any }
+      payload: { title?: string; content?: string; panel_script?: any; price?: number }
     ) => apiFetch<any>(supabase, `/api/project/${projectId}/chapter/${chapterId}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
@@ -399,7 +400,23 @@ export function createApi(supabase: SupabaseClient) {
         // Add vote
         return supabase.from('feedback_votes').insert({ feedback_id: feedbackId, user_id: user.id });
       }
-    }
+    },
+
+    // Payment
+    createCheckoutSession: (priceId: string, successUrl: string, cancelUrl: string) =>
+      apiFetch<{ url: string }>(supabase, `/api/payment/create-checkout-session`, {
+        method: 'POST',
+        body: JSON.stringify({ priceId, successUrl, cancelUrl })
+      }),
+    
+    getWalletBalance: () =>
+      apiFetch<{ paidCoins: number; bonusCoins: number; total: number }>(supabase, `/api/payment/balance`),
+      
+    unlockChapter: (chapterId: string, cost: number) =>
+      apiFetch<{ success: boolean; message: string }>(supabase, `/api/payment/unlock-chapter`, {
+        method: 'POST',
+        body: JSON.stringify({ chapterId, cost })
+      }),
   };
 }
 

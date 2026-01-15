@@ -6,13 +6,14 @@ import { createApi } from "@/lib/api";
 import { Chat } from "@/components/chat/Chat";
 import { CharacterManager } from "@/components/workspace/CharacterManager";
 import { WorldSettingsManager } from "@/components/workspace/WorldSettingsManager";
-import { Settings as IconSettings, ChevronLeft, ChevronRight, Plus, Trash2, Loader2, ChevronDown } from "lucide-react";
+import { Settings as IconSettings, ChevronLeft, ChevronRight, Plus, Trash2, Loader2, ChevronDown, Lock, LockOpen } from "lucide-react";
 
 type ChapterItem = {
   id: string;
   title: string;
   content?: string | null;
   panelScript?: any | null;
+  price?: number;
   createdAt?: string;
 };
 
@@ -29,6 +30,7 @@ export function Workspace({ projectId }: { projectId: string }) {
 
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
+  const [price, setPrice] = useState<number>(0);
   const [saving, setSaving] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
@@ -421,6 +423,7 @@ export function Workspace({ projectId }: { projectId: string }) {
     const ch = chapters.find((c) => c.id === id);
     setTitle(ch?.title || "");
     setContent((ch?.content || "") as string);
+    setPrice(ch?.price || 0);
     contentRef.current = (ch?.content || "") as string;
     try { if (editorRef.current) { editorRef.current.textContent = (ch?.content || "") as string; placeCaretAtEnd(editorRef.current); } } catch {}
   }, [chapters]);
@@ -446,6 +449,7 @@ export function Workspace({ projectId }: { projectId: string }) {
     if (!ch) return;
     setTitle(ch.title || "");
     setContent((ch.content || "") as string);
+    setPrice(ch.price || 0);
     contentRef.current = (ch.content || "") as string;
     try { if (editorRef.current) { editorRef.current.textContent = (ch.content || "") as string; placeCaretAtEnd(editorRef.current); } } catch {}
   }, [activeId]);
@@ -501,14 +505,14 @@ export function Workspace({ projectId }: { projectId: string }) {
   }, [rightWidth]);
 
   // Persist edits (debounced)
-  const scheduleSave = useCallback((id: string, t: string, c: string) => {
+  const scheduleSave = useCallback((id: string, t: string, c: string, p: number) => {
     if (!id) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       setSaving(true);
       try {
-        await api.updateChapter(projectId, id, { title: t, content: c });
-        setChapters((prev) => prev.map((ch) => ch.id === id ? { ...ch, title: t, content: c } : ch));
+        await api.updateChapter(projectId, id, { title: t, content: c, price: p });
+        setChapters((prev) => prev.map((ch) => ch.id === id ? { ...ch, title: t, content: c, price: p } : ch));
       } finally {
         setSaving(false);
       }
@@ -520,12 +524,12 @@ export function Workspace({ projectId }: { projectId: string }) {
     if (!activeId) return;
     setTitle(v);
     const live = editorRef.current?.textContent || content;
-    scheduleSave(activeId, v, live);
+    scheduleSave(activeId, v, live, price);
   };
   const onContentChange = (v: string) => {
     if (!activeId) return;
     contentRef.current = v;
-    scheduleSave(activeId, title, v);
+    scheduleSave(activeId, title, v, price);
     // Ensure any inserted elements retain LTR direction
     try {
       const el = editorRef.current;
@@ -544,6 +548,14 @@ export function Workspace({ projectId }: { projectId: string }) {
       }
     } catch {}
     // Removed placeCaretAtEnd call - cursor should stay at current position during editing
+  };
+
+  const onPriceChange = (v: string) => {
+    if (!activeId) return;
+    const p = parseInt(v) || 0;
+    setPrice(p);
+    const live = editorRef.current?.textContent || content;
+    scheduleSave(activeId, title, live, p);
   };
 
   const onNewChapter = async () => {
@@ -880,13 +892,42 @@ export function Workspace({ projectId }: { projectId: string }) {
               <div className="flex-1 min-h-0 overflow-y-auto bg-bg-elevated flex justify-center" dir="ltr" style={{ direction: 'ltr' }}>
                 <div className="w-full max-w-[800px] px-12 py-16 text-left" dir="ltr" style={{ direction: 'ltr' }}>
                   {/* Chapter Title Input */}
-                  <input
-                    value={title}
-                    onChange={(e) => onTitleChange(e.target.value)}
-                    placeholder="Chapter Title"
-                    dir="ltr"
-                    className="w-full bg-transparent border-none text-[32px] font-bold text-text-primary placeholder:text-text-tertiary outline-none mb-8 tracking-tight text-left"
-                  />
+                  <div className="flex items-center gap-4 mb-6">
+                    <input
+                      value={title}
+                      onChange={(e) => onTitleChange(e.target.value)}
+                      placeholder="Chapter Title"
+                      dir="ltr"
+                      className="flex-1 bg-transparent border-none text-[32px] font-bold text-text-primary placeholder:text-text-tertiary outline-none tracking-tight text-left"
+                    />
+                    
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => {
+                           if (price > 0) onPriceChange("0");
+                           else onPriceChange("5"); // Default 5 coins
+                        }}
+                        className={`p-2 rounded-full transition-colors ${price > 0 ? 'bg-yellow-500/10 text-yellow-500' : 'text-text-tertiary hover:bg-bg-hover'}`}
+                        title={price > 0 ? "Chapter is Locked (Premium)" : "Chapter is Free"}
+                      >
+                         {price > 0 ? <Lock size={20} className="fill-current" /> : <LockOpen size={20} />}
+                      </button>
+
+                      {price > 0 && (
+                        <div className="flex items-center gap-2 bg-bg-primary rounded-lg px-3 py-1.5 border border-yellow-500/30 animate-in fade-in slide-in-from-right-2">
+                            <span className="text-xs text-yellow-500 font-bold uppercase tracking-wider">Price</span>
+                            <input
+                               type="number"
+                               min="1"
+                               value={price}
+                               onChange={(e) => onPriceChange(e.target.value)}
+                               className="w-12 bg-transparent border-none text-sm font-semibold text-text-primary outline-none text-right appearance-none"
+                            />
+                            <span className="text-xs text-text-secondary font-medium">Coins</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                   {/* Chapter Content - Contenteditable */}
                   <div
                     contentEditable

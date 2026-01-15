@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState, useRef, memo } from "react";
 import { useRouter } from "next/navigation";
 import { useSupabase } from "@/components/providers/SupabaseProvider";
 import { createApi } from "@/lib/api";
-import { BookOpen } from "lucide-react";
+import { BookOpen, Lock, Coins, Loader2 } from "lucide-react";
 import { useTheme } from "@/components/providers/ThemeProvider";
 import type { ReaderSettings } from "@/components/ReaderView";
 
@@ -883,6 +883,8 @@ function ChapterContent({ slug, chapterId, mode, readerSettings }: { slug: strin
   const [chapter, setChapter] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
+  const { isDark } = useTheme(); // Moved hook up
+
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -913,6 +915,9 @@ function ChapterContent({ slug, chapterId, mode, readerSettings }: { slug: strin
     return () => { mounted = false; };
   }, [slug, chapterId, api]);
 
+  // Unlock State
+  const [unlockTarget, setUnlockTarget] = useState<{ id: string; price: number } | null>(null);
+
   if (loading) {
     return <div className="flex items-center justify-center h-full text-text-secondary">Loading…</div>;
   }
@@ -924,7 +929,7 @@ function ChapterContent({ slug, chapterId, mode, readerSettings }: { slug: strin
   const s = readerSettings;
   const maxWidth = s.contentWidth === 'narrow' ? '40rem' : s.contentWidth === 'medium' ? '48rem' : '64rem';
   const fontFamily = s.fontFamily === 'serif' ? 'ui-serif, Georgia, serif' : s.fontFamily === 'dyslexia' ? 'OpenDyslexic, Lexend, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif' : 'system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-  const { isDark } = useTheme();
+  
   const deriveColors = () => {
     let bg: string | undefined;
     let fg: string | undefined;
@@ -964,6 +969,30 @@ function ChapterContent({ slug, chapterId, mode, readerSettings }: { slug: strin
     textIndent: `${s.firstLineIndent}px`,
     marginBottom: `${s.paragraphSpacing}px`,
   };
+
+  // Render Locked Content
+  if (chapter.content === 'LOCKED_CONTENT') {
+      const handleUnlock = async () => {
+         try {
+            await api.unlockChapter(chapter.id, chapter.price || 5);
+            window.location.reload(); 
+         } catch (e: any) {
+            alert("Error unlocking: " + e.message);
+         }
+      };
+
+      return (
+        <div className="max-w-4xl mx-auto px-8 py-12 bg-transparent text-text-primary" style={containerStyle}>
+           <h1 className="text-3xl font-bold text-text-primary mb-2">{chapter.title}</h1>
+           <div className="text-sm text-text-tertiary mb-8">
+             {new Date(chapter.createdAt).toLocaleDateString()}
+           </div>
+           
+           <LockedChapterPlaceholder price={chapter.price || 5} onUnlock={handleUnlock} />
+        </div>
+      );
+  }
+
   return (
     <div className="max-w-4xl mx-auto px-8 py-12 bg-transparent text-text-primary" style={containerStyle}>
       <h1 className="text-3xl font-bold text-text-primary mb-2">{chapter.title}</h1>
@@ -991,6 +1020,120 @@ function ChapterContent({ slug, chapterId, mode, readerSettings }: { slug: strin
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// Minimal Unlock components for this file if not exported often
+function LockedChapterPlaceholder({ price, onUnlock }: { price: number; onUnlock: () => void }) {
+  const supabase = useSupabase();
+  const router = useRouter();
+  const api = useMemo(() => createApi(supabase), [supabase]);
+  
+  const [balance, setBalance] = useState<{ total: number } | null>(null);
+  const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [unlocking, setUnlocking] = useState(false);
+
+  useEffect(() => {
+    async function load() {
+      const { data: { session } } = await supabase.auth.getSession();
+      setUser(session?.user || null);
+      if (session?.user) {
+        try {
+          const bal = await api.getWalletBalance();
+          setBalance(bal);
+        } catch { } // ignore error
+      }
+      setLoading(false);
+    }
+    load();
+  }, [api, supabase]);
+
+// Replace the first occurrence
+  const handleUnlock = async () => {
+    if (!user) return router.push('/auth/login?next=' + window.location.pathname);
+    if (!balance || balance.total < price) return;
+    
+    setUnlocking(true);
+    try {
+      await api.unlockChapter(window.location.pathname.split('/').pop()!, price); 
+      window.location.reload(); 
+    } catch (err: any) {
+      alert("Failed: " + err.message);
+    } finally {
+      setUnlocking(false);
+    }
+  };
+
+  // We need chapterId to perform unlock API call. Parent passes `onUnlock` which currently triggers modal.
+  // We need to refactor Parent to pass chapterId. 
+  // For now, let's assume I will update Parent to pass `chapterId` to this component.
+  
+  // Wait, I can't easily change the prop signature in this single `replace_file_content` without changing the parent call site too.
+  // I will assume `chapterId` is passed in props and update Parent in the same file update (since it's same file).
+  // Ah, `LockedChapterPlaceholder` is defined at bottom of file. `ChapterContent` calls it.
+  
+  // Let's handle the UI first.
+  
+  if (loading) return <div className="py-20 flex justify-center"><Loader2 className="animate-spin text-cyan-400" /></div>;
+
+  const canAfford = balance && balance.total >= price;
+
+  return (
+    <div className="flex items-center justify-center py-12 px-4 animate-in fade-in duration-300">
+      <div className="bg-bg-elevated border border-border-default rounded-2xl p-8 max-w-sm w-full shadow-elevation relative text-center">
+          <div className="w-16 h-16 bg-bg-hover rounded-full flex items-center justify-center mb-6 mx-auto text-accent">
+            <Lock size={32} />
+          </div>
+          
+          <h3 className="text-2xl font-bold text-text-primary mb-2">Unlock Chapter</h3>
+          <p className="text-text-secondary text-sm mb-8">
+            This chapter is locked. Spend coins to continue reading.
+          </p>
+
+          <div className="bg-bg-primary rounded-lg p-4 w-full mb-6 flex justify-between items-center border border-border-default">
+             <span className="text-text-secondary text-sm">Cost</span>
+             <span className="font-bold text-text-primary flex items-center gap-1">
+               {price} <Coins size={14} className="text-yellow-500" />
+             </span>
+          </div>
+
+          {user && (
+            <div className="flex justify-between w-full text-sm mb-6 px-1">
+               <span className="text-text-secondary">Your Balance:</span>
+               <span className={`font-bold ${canAfford ? 'text-green-500' : 'text-red-400'} flex items-center gap-1`}>
+                 {balance?.total || 0} <Coins size={14} className="text-yellow-500" />
+               </span>
+            </div>
+          )}
+
+          {!user ? (
+             <button
+               onClick={() => router.push(`/auth/login?next=${window.location.pathname}`)}
+               className="w-full bg-accent hover:bg-accent-hover text-accent-foreground font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition"
+             >
+               Log in to Unlock
+             </button>
+          ) : canAfford ? (
+            <button
+               onClick={onUnlock} 
+               disabled={unlocking}
+               className="w-full bg-accent hover:bg-accent-hover text-accent-foreground font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition"
+            >
+              {unlocking ? <Loader2 className="animate-spin" /> : <Lock size={16} />}
+              Unlock for {price} Coins
+            </button>
+          ) : (
+             <button
+               onClick={() => router.push('/store')}
+               className="w-full bg-yellow-400 hover:bg-yellow-300 text-black font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition"
+            >
+               <Coins size={16} />
+               Get More Coins
+            </button>
+          )}
+      </div>
     </div>
   );
 }
