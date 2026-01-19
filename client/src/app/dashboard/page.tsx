@@ -3,7 +3,7 @@
 export const dynamic = 'force-dynamic';
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Download, GitBranch, FolderOpen, Share2, BookOpen, Trash2, DollarSign, Coins } from "lucide-react";
+import { BookOpen, ChevronLeft, ChevronRight, Menu, Settings, X, Image as ImageIcon, Sparkles, GitBranch, Plus, Download, FolderOpen, Share2, Trash2, DollarSign, Coins } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useSupabase } from "@/components/providers/SupabaseProvider";
 import { createApi } from "@/lib/api";
@@ -260,8 +260,8 @@ export default function DashboardPage() {
   }, [router]);
 
   const handleBranch = useCallback((id: string) => {
-    void id; /* placeholder */
-  }, []);
+    router.push(`/project/${id}/branches`);
+  }, [router]);
 
   const handleExport = useCallback((id: string) => {
     const project = projects.find(p => p.id === id);
@@ -787,7 +787,7 @@ const ProjectCard = memo(function ProjectCard({ item, onOpen, onBranch, onExport
             <span className="hidden md:inline">Open</span>
             <span className="md:hidden sr-only">Open</span>
           </button>
-          <button onClick={() => onBranch(item.id)} className="flex-1 md:flex-none rounded-md border border-border-default px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:scale-105 transition-all duration-micro inline-flex items-center justify-center md:justify-start gap-1" disabled title="Branch (coming soon)">
+          <button onClick={() => onBranch(item.id)} className="flex-1 md:flex-none rounded-md border border-border-default px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover hover:scale-105 transition-all duration-micro inline-flex items-center justify-center md:justify-start gap-1" title="Create a new story branch">
             <GitBranch className="w-4 h-4" aria-hidden="true" />
             <span className="hidden md:inline">Branch</span>
             <span className="md:hidden sr-only">Branch</span>
@@ -1197,6 +1197,8 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
   const apiBase = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, '');
   const [mode, setMode] = useState<"novel" | "manhwa">(initialMode);
   const [chapters, setChapters] = useState<Array<{ id: string; title: string }>>([]);
+  const [projectDetails, setProjectDetails] = useState<any>(null);
+  const [selectedBranchId, setSelectedBranchId] = useState<string | undefined>(undefined);
   const [activeCh, setActiveCh] = useState<string | null>(null);
   const [targetCh, setTargetCh] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
@@ -1380,13 +1382,16 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
       try {
         // Load full chapter list in ascending order
         const api = createApi(supabase);
-        const first = await api.listChaptersPaginated(projectId, 0, 100);
+        // Load project for branches
+        api.getProject(projectId).then(setProjectDetails).catch(() => {});
+        
+        const first = await api.listChaptersPaginated(projectId, 0, 100, false, selectedBranchId);
         if (!mounted) return;
         let all = first.items as Array<{ id: string; title: string }>;
         const total = typeof first.total === 'number' ? first.total : all.length;
         let page = 1;
         while (all.length < total) {
-          const next = await api.listChaptersPaginated(projectId, page, 100);
+          const next = await api.listChaptersPaginated(projectId, page, 100, false, selectedBranchId);
           all = all.concat(next.items as Array<{ id: string; title: string }>);
           page += 1;
           if (!mounted) return;
@@ -1401,7 +1406,8 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
       } catch { }
     })();
     return () => { mounted = false; };
-  }, [projectId, supabase]);
+    return () => { mounted = false; };
+  }, [projectId, supabase, selectedBranchId]);
 
   const toggleFs = async () => {
     try {
@@ -1449,6 +1455,21 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
           </div>
 
         </div>
+        {projectDetails?.branches && projectDetails.branches.length > 0 && (
+          <div className="bg-bg-hover/60 rounded-full py-1 px-3 flex items-center gap-2 text-xs">
+             <GitBranch size={14} className="text-text-secondary" />
+             <select 
+               value={selectedBranchId || ""} 
+               onChange={(e) => setSelectedBranchId(e.target.value || undefined)}
+               className="appearance-none bg-transparent border-none outline-none text-text-primary font-medium cursor-pointer min-w-[80px]"
+             >
+               <option value="" className="bg-bg-elevated">Main Story</option>
+               {projectDetails.branches.map((b: any) => (
+                  <option key={b.id} value={b.id} className="bg-bg-elevated">{b.name}</option>
+               ))}
+             </select>
+          </div>
+        )}
         <div className="flex items-center gap-1 md:gap-2 flex-shrink-0">
           <button onClick={toggleFs} className="rounded-md border border-border-default px-2 md:px-3 py-1 md:py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro">{fs ? 'Exit' : 'Full'}</button>
           <button onClick={() => setSettingsOpen(v => !v)} className="rounded-md border border-border-default px-2 md:px-3 py-1 md:py-1.5 text-xs text-text-secondary hover:bg-bg-hover transition-micro">Settings</button>
@@ -1481,6 +1502,7 @@ function ReaderCanvasOverlay({ projectId, initialMode, onClose }: { projectId: s
             <div className="h-full">
               <ReaderView
                 projectId={projectId}
+                branchId={selectedBranchId}
                 mode={mode}
                 targetChapterId={targetCh}
                 onChapterInView={(id) => setActiveCh(id)}

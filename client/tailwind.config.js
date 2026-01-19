@@ -10,6 +10,7 @@ module.exports = {
     extend: {
       colors: {
         'bg-primary': 'var(--bg-primary)',
+        'bg-base': 'var(--bg-primary)',
         'bg-elevated': 'var(--bg-elevated)',
         'bg-hover': 'var(--bg-hover)',
         'border-default': 'var(--border)',

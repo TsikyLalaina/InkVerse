@@ -81,8 +81,8 @@ export function createApi(supabase: SupabaseClient) {
     // Public read APIs (no auth required, but sends token if available for ownership/unlock checks)
     getPublicProject: (slug: string) =>
       apiFetch<any>(supabase, `/api/public/project/${encodeURIComponent(slug)}`),
-    getPublicChapters: (slug: string, page: number, limit: number) =>
-      apiFetch<{ items: any[]; total: number }>(supabase, `/api/public/project/${encodeURIComponent(slug)}/chapters?page=${encodeURIComponent(page)}&limit=${encodeURIComponent(limit)}`),
+    getPublicChapters: (slug: string, page: number, limit: number, branchId?: string) =>
+      apiFetch<{ items: any[]; total: number }>(supabase, `/api/public/project/${encodeURIComponent(slug)}/chapters?page=${encodeURIComponent(page)}&limit=${encodeURIComponent(limit)}${branchId ? `&branchId=${encodeURIComponent(branchId)}` : ''}`),
     getPublicProjects: (page: number, limit: number, q?: string) =>
       apiFetch<{ items: any[]; total: number }>(
         supabase,
@@ -95,9 +95,9 @@ export function createApi(supabase: SupabaseClient) {
       apiFetch<any[]>(supabase, `/api/project/${projectId}/chat/messages`),
 
     // Chats (per project)
-    listChats: (projectId: string) =>
-      apiFetch<any[]>(supabase, `/api/project/${projectId}/chats`),
-    createChat: (projectId: string, body: { type: 'plot'|'character'|'world'; title?: string }) =>
+    listChats: (projectId: string, branchId?: string) =>
+      apiFetch<any[]>(supabase, `/api/project/${projectId}/chats${branchId ? `?branchId=${branchId}` : ''}`),
+    createChat: (projectId: string, body: { type: 'plot'|'character'|'world'; title?: string; branchId?: string }) =>
       apiFetch<any>(supabase, `/api/project/${projectId}/chats`, { method: 'POST', body: JSON.stringify(body) }),
     renameChat: (projectId: string, chatId: string, title: string) =>
       apiFetch<any>(supabase, `/api/project/${projectId}/chats/${chatId}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
@@ -117,8 +117,8 @@ export function createApi(supabase: SupabaseClient) {
       apiFetch<{ count: number; snippet: string }>(supabase, `/api/project/${projectId}/chapters/summary`),
 
     // Paginated chapters for reader
-    listChaptersPaginated: (projectId: string, page: number, limit: number) =>
-      apiFetch<{ items: any[]; total: number }>(supabase, `/api/project/${projectId}/chapters?page=${encodeURIComponent(page)}&limit=${encodeURIComponent(limit)}`),
+    listChaptersPaginated: (projectId: string, page: number, limit: number, includeBranches: boolean = false, branchId?: string) =>
+      apiFetch<{ items: any[]; total: number }>(supabase, `/api/project/${projectId}/chapters?page=${encodeURIComponent(page)}&limit=${encodeURIComponent(limit)}${includeBranches ? '&includeBranches=true' : ''}${branchId ? `&branchId=${encodeURIComponent(branchId)}` : ''}`),
 
     // Update chapter
     updateChapter: (
@@ -412,11 +412,37 @@ export function createApi(supabase: SupabaseClient) {
     getWalletBalance: () =>
       apiFetch<{ paidCoins: number; bonusCoins: number; total: number }>(supabase, `/api/payment/balance`),
       
-    unlockChapter: (chapterId: string, cost: number) =>
+      unlockChapter: (chapterId: string, cost: number) =>
       apiFetch<{ success: boolean; message: string }>(supabase, `/api/payment/unlock-chapter`, {
         method: 'POST',
         body: JSON.stringify({ chapterId, cost })
       }),
+
+    // Branching
+    createBranch: (projectId: string, body: { name: string; baseChapterId?: string }) =>
+      apiFetch<any>(supabase, `/api/project/${projectId}/branch`, { method: 'POST', body: JSON.stringify(body) }),
+    
+    getBranches: (projectId: string) =>
+      apiFetch<any[]>(supabase, `/api/project/${projectId}/branches`),
+    
+    getBranchChapters: (branchId: string) =>
+      apiFetch<any[]>(supabase, `/api/branches/${branchId}/chapters`),
+    
+    getBranchContext: (branchId: string) =>
+      apiFetch<{
+        branch: any;
+        inheritedChapters: any[];
+        branchChapters: any[];
+      }>(supabase, `/api/branches/${branchId}/context`),
+    
+    updateChapterOrder: (chapterId: string, order: number) =>
+      apiFetch<any>(supabase, `/api/chapters/${chapterId}/order`, { method: 'PUT', body: JSON.stringify({ order }) }),
+    
+    updateBranch: (branchId: string, name: string) =>
+      apiFetch<any>(supabase, `/api/branches/${branchId}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+    
+    deleteBranch: (branchId: string) =>
+      apiFetch<void>(supabase, `/api/branches/${branchId}`, { method: 'DELETE' }),
   };
 }
 

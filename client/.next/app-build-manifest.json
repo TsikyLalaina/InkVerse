@@ -1,9 +1,9 @@
 {
   "pages": {
-    "/admin/payouts/page": [
+    "/explore/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/admin/payouts/page.js"
+      "static/chunks/app/explore/page.js"
     ],
     "/layout": [
       "static/chunks/webpack.js",
@@ -17,10 +17,35 @@
       "static/css/app/dashboard/page.css",
       "static/chunks/app/dashboard/page.js"
     ],
+    "/project/[id]/branches/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/project/[id]/branches/page.js"
+    ],
+    "/project/[id]/layout": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/project/[id]/layout.js"
+    ],
+    "/project/[id]/branch/[branchId]/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/project/[id]/branch/[branchId]/page.js"
+    ],
+    "/project/[id]/chat/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/project/[id]/chat/page.js"
+    ],
     "/auth/login/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/auth/login/page.js"
+    ],
+    "/store/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/store/page.js"
     ]
   }
 }

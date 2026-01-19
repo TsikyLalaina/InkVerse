@@ -8,6 +8,7 @@ import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
 import { generateImage } from '../services/fal';
 import { awardExpForAction } from '../utils/expAwarder';
+import { getBranchContextChapters } from '../services/branchService';
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY || '' });
 
@@ -51,7 +52,7 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
 
     const chatRow = await (prisma as any).chat.findFirst({
       where: { id: params.chatId },
-      select: { id: true, type: true, projectId: true, project: { select: { id: true, userId: true, mode: true } } },
+      select: { id: true, type: true, projectId: true, branchId: true, project: { select: { id: true, userId: true, mode: true } } },
     } as any);
     if (!chatRow || (chatRow as any).project.userId !== user.id) return reply.code(404).send({ error: 'Not found' });
     const projectIdStr = (chatRow as any).projectId as string;
@@ -997,11 +998,20 @@ const chatRoutes: FastifyPluginCallback = (app, _opts, done) => {
 
       // Build prioritized context with DB truth (settings), target chapter (full), other chapters (summaries), then chat
       // Prepare chapters
-      const chapters = await prisma.chapter.findMany({
-        where: { projectId: projectIdStr },
-        orderBy: { createdAt: 'asc' },
-        select: { id: true, title: true, content: true, createdAt: true },
-      });
+      // Build prioritized context
+      const branchId = (chatRow as any).branchId;
+      let chapters: any[] = [];
+      
+       if (branchId) {
+          chapters = await getBranchContextChapters(branchId);
+       } else {
+         // Main timeline
+         chapters = await (prisma as any).chapter.findMany({
+           where: { projectId: projectIdStr, branchId: null },
+           orderBy: { order: 'asc' },
+           select: { id: true, title: true, content: true, createdAt: true },
+         });
+      }
       const resolveByNumber = (n?: number | null) => {
         if (!n || n < 1) return null;
         return chapters[n - 1] || null;

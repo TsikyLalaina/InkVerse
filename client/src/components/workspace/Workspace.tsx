@@ -6,7 +6,7 @@ import { createApi } from "@/lib/api";
 import { Chat } from "@/components/chat/Chat";
 import { CharacterManager } from "@/components/workspace/CharacterManager";
 import { WorldSettingsManager } from "@/components/workspace/WorldSettingsManager";
-import { Settings as IconSettings, ChevronLeft, ChevronRight, Plus, Trash2, Loader2, ChevronDown, Lock, LockOpen } from "lucide-react";
+import { Settings as IconSettings, ChevronLeft, ChevronRight, Plus, Trash2, Loader2, ChevronDown, Lock, LockOpen, X, AlertTriangle, GitBranch } from "lucide-react";
 
 type ChapterItem = {
   id: string;
@@ -15,9 +15,10 @@ type ChapterItem = {
   panelScript?: any | null;
   price?: number;
   createdAt?: string;
+  isReadOnly?: boolean;
 };
 
-export function Workspace({ projectId }: { projectId: string }) {
+export function Workspace({ projectId, branchId }: { projectId: string; branchId?: string }) {
   const supabase = useSupabase();
   const api = useMemo(() => createApi(supabase), [supabase]);
 
@@ -71,14 +72,18 @@ export function Workspace({ projectId }: { projectId: string }) {
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const coverDropRef = useRef<HTMLDivElement | null>(null);
 
+  // Branches data for delete warnings
+  const [branches, setBranches] = useState<{ id: string; name: string; baseChapterId: string | null }[]>([]);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ chapterId: string; title: string; branchNames: string[] } | null>(null);
+
   const SETTINGS_TAB_ID = '__settings__';
   const CHARACTERS_TAB_ID = '__characters__';
   const WORLD_TAB_ID = '__world__';
 
   // Chats sidebar (right)
   const [rightOpen, setRightOpen] = useState(true);
-  const chatsCacheKey = useMemo(() => `inkverse_project_${projectId}_chats`, [projectId]);
-  const chatsActiveKey = useMemo(() => `inkverse_project_${projectId}_active_chat`, [projectId]);
+  const chatsCacheKey = useMemo(() => `inkverse_project_${projectId}_branch_${branchId || 'main'}_chats`, [projectId, branchId]);
+  const chatsActiveKey = useMemo(() => `inkverse_project_${projectId}_branch_${branchId || 'main'}_active_chat`, [projectId, branchId]);
   const chaptersCacheKey = useMemo(() => `inkverse_project_${projectId}_chapters`, [projectId]);
   const tabsCacheKey = useMemo(() => `inkverse_project_${projectId}_open_tabs`, [projectId]);
   const activeTabKey = useMemo(() => `inkverse_project_${projectId}_active_tab`, [projectId]);
@@ -110,7 +115,16 @@ export function Workspace({ projectId }: { projectId: string }) {
     checkMobile();
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
   }, []);
+
+  // Auto-dismiss toast after 5 seconds
+  useEffect(() => {
+    if (toastMsg) {
+      const timer = setTimeout(() => setToastMsg(""), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [toastMsg]);
 
   // Hydrate chats from localStorage after mount (prevents SSR/client mismatch)
   useEffect(() => {
@@ -181,9 +195,28 @@ export function Workspace({ projectId }: { projectId: string }) {
       if (hasChaptersCache) { return; }
       try {
         setLoadingCh(true);
-        const { items } = await api.listChaptersPaginated(projectId, 0, 100);
+        let chItems: ChapterItem[] = [];
+        
+        if (branchId) {
+          // Load branch context (inherited + branch chapters)
+          const context = await api.getBranchContext(branchId);
+          const inherited = context.inheritedChapters.map((c: any) => ({ ...c, isReadOnly: true }));
+          const branchChs = context.branchChapters.map((c: any) => ({ ...c, isReadOnly: false }));
+          chItems = [...inherited, ...branchChs];
+          setBranches([context.branch]); // Set current branch info
+          // Check if we also need to load other branches? Maybe not for now.
+        } else {
+          // Load normal project chapters
+          const [chapterResult, branchesResult] = await Promise.all([
+            api.listChaptersPaginated(projectId, 0, 100),
+            api.getBranches(projectId).catch(() => [])
+          ]);
+          chItems = chapterResult.items as ChapterItem[];
+          setBranches(branchesResult || []);
+        }
+
         if (!mounted) return;
-        setChapters(sortChapters(items as ChapterItem[]));
+        setChapters(sortChapters(chItems));
       } catch (e: any) {
         if (mounted) setErrorCh(e?.message || "Failed to load chapters");
       } finally {
@@ -231,7 +264,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         const t = String(detail.title || 'Untitled Chapter');
         const c = detail.content !== undefined ? String(detail.content) : '';
         const panel_script = detail.panel_script ?? undefined;
-        const res = await api.createChapter(projectId, panel_script ? { title: t, panel_script } : { title: t, content: c });
+        const res = await api.createChapter(projectId, panel_script ? { title: t, panel_script, branchId } : { title: t, content: c, branchId });
         const newId = (res as any).id as string;
         const createdAt = (res as any).createdAt as string | undefined;
         setChapters((prev) => sortChapters([...prev, { id: newId, title: (res as any).title, content: panel_script ? '' : c, createdAt }]));
@@ -263,6 +296,11 @@ export function Workspace({ projectId }: { projectId: string }) {
         }
       }
       if (!targetId) return;
+      const targetCh = chapters.find(c => c.id === targetId);
+      if (targetCh?.isReadOnly) {
+        setToastMsg("Cannot edit read-only chapter (inherited) in this branch.");
+        return;
+      }
       try {
         const updated = await api.updateChapter(projectId, targetId, { content });
         setChapters((prev) => prev.map((c) => c.id === targetId ? { ...c, content } : c));
@@ -360,7 +398,7 @@ export function Workspace({ projectId }: { projectId: string }) {
     (async () => {
       if (hasChatsCache) { return; }
       try {
-        const xs = await api.listChats(projectId);
+        const xs = await api.listChats(projectId, branchId);
         if (!mounted) return;
         const next = xs || [];
         try {
@@ -373,7 +411,7 @@ export function Workspace({ projectId }: { projectId: string }) {
           if (next && next.length) setActiveChatId(next[0].id);
           else {
             // ensure at least one plot chat exists
-            const created = await api.createChat(projectId, { type: 'plot' });
+            const created = await api.createChat(projectId, { type: 'plot', branchId });
             setChats([created]);
             setActiveChatId(created.id);
           }
@@ -511,8 +549,9 @@ export function Workspace({ projectId }: { projectId: string }) {
     saveTimer.current = setTimeout(async () => {
       setSaving(true);
       try {
-        await api.updateChapter(projectId, id, { title: t, content: c, price: p });
-        setChapters((prev) => prev.map((ch) => ch.id === id ? { ...ch, title: t, content: c, price: p } : ch));
+        const safeTitle = t.trim() || "Untitled Chapter";
+        await api.updateChapter(projectId, id, { title: safeTitle, content: c, price: p });
+        setChapters((prev) => prev.map((ch) => ch.id === id ? { ...ch, title: safeTitle, content: c, price: p } : ch));
       } finally {
         setSaving(false);
       }
@@ -561,7 +600,7 @@ export function Workspace({ projectId }: { projectId: string }) {
   const onNewChapter = async () => {
     try {
       setCreatingChapter(true);
-      const res = await api.createChapter(projectId, { title: "Untitled Chapter" });
+      const res = await api.createChapter(projectId, { title: "Untitled Chapter", branchId });
       const createdAt = (res as any).createdAt as string | undefined;
       setChapters((prev) => sortChapters([...prev, { id: (res as any).id, title: (res as any).title, content: "", createdAt }]));
       openTab((res as any).id);
@@ -570,21 +609,42 @@ export function Workspace({ projectId }: { projectId: string }) {
   };
 
   const onDeleteChapter = useCallback(async (id: string) => {
+    const chapter = chapters.find(c => c.id === id);
+    const branchesFromChapter = branches.filter(b => b.baseChapterId === id);
+    
+    if (branchesFromChapter.length > 0) {
+      // Show custom modal with branch warning
+      setDeleteConfirm({
+        chapterId: id,
+        title: chapter?.title || 'this chapter',
+        branchNames: branchesFromChapter.map(b => b.name)
+      });
+      return;
+    }
+    
+    // No branches, use simple confirm
+    // eslint-disable-next-line no-alert
+    if (!confirm('Delete this chapter permanently?')) return;
+    await executeDeleteChapter(id);
+  }, [chapters, branches]);
+
+  const executeDeleteChapter = async (id: string) => {
     try {
-      // eslint-disable-next-line no-alert
-      if (!confirm('Delete this chapter permanently?')) return;
       setDeletingId(id);
       await api.deleteChapter(projectId, id);
       setChapters((prev) => prev.filter((c) => c.id !== id));
       setTabs((prev) => prev.filter((t) => t !== id));
       setActiveId((curr) => (curr === id ? null : curr));
+      // Also remove any deleted branches from state
+      setBranches((prev) => prev.filter((b) => b.baseChapterId !== id));
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to delete';
       setErrorCh(msg);
     } finally {
       setDeletingId(null);
+      setDeleteConfirm(null);
     }
-  }, [api, projectId]);
+  };
 
   const activeChapter = chapters.find((c) => c.id === activeId) || null;
 
@@ -630,7 +690,16 @@ export function Workspace({ projectId }: { projectId: string }) {
         )}
         {/* Project Title - centered on desktop, left-aligned on mobile */}
         <div className={`${isMobile ? 'flex-1 px-4' : 'absolute inset-0 flex items-center justify-center pointer-events-none'}`}>
-          <div className="text-sm font-semibold text-text-primary truncate max-w-[60%] tracking-elegant">{projectTitle || 'Project'}</div>
+          <div className="text-sm font-semibold text-text-primary truncate max-w-[60%] tracking-elegant flex items-center gap-2">
+            <span>{projectTitle || 'Project'}</span>
+            {branchId && branches.length > 0 && (
+              <span className="flex items-center gap-1 font-normal text-text-secondary">
+                <span className="text-text-tertiary">/</span>
+                <GitBranch className="w-3.5 h-3.5" />
+                <span>{branches[0].name}</span>
+              </span>
+            )}
+          </div>
         </div>
         {/* Settings button - always visible */}
         <div className={`${isMobile ? 'flex items-center gap-2' : 'absolute right-2 top-1 z-10 flex items-center gap-2'}`}>
@@ -704,15 +773,19 @@ export function Workspace({ projectId }: { projectId: string }) {
             {chapters.map((c, idx) => {
               const wordCount = c.content ? c.content.trim().split(/\s+/).filter(Boolean).length : 0;
               return (
-              <div key={c.id} className={`group w-full flex items-start justify-between gap-2 px-3 py-3 rounded-lg mb-2 transition-all duration-150 ${activeId === c.id ? 'bg-bg-elevated border-l-3 border-accent' : 'hover:bg-bg-hover'}`}>
+              <div key={c.id} className={`group w-full flex items-start justify-between gap-2 px-3 py-3 rounded-lg mb-2 transition-all duration-150 ${activeId === c.id ? 'bg-bg-elevated border-l-3 border-accent' : 'hover:bg-bg-hover'} ${c.isReadOnly ? 'opacity-80' : ''}`}>
                 <button
                   className="flex-1 text-left"
                   onClick={() => openTab(c.id)}
                 >
-                  <div className="text-xs uppercase text-text-tertiary mb-1">Chapter {idx + 1}</div>
+                  <div className="text-xs uppercase text-text-tertiary mb-1 flex items-center gap-2">
+                    Chapter {idx + 1}
+                    {c.isReadOnly && <span className="px-1.5 py-0.5 rounded text-[10px] bg-bg-elevated border border-border-default text-text-secondary">Read Only</span>}
+                  </div>
                   <div className={`text-sm font-medium mb-1 ${activeId === c.id ? 'text-text-primary' : 'text-text-secondary'}`}>{c.title || 'Untitled'}</div>
                   <div className="text-xs text-text-tertiary">{wordCount} words</div>
                 </button>
+                {!c.isReadOnly && (
                 <button
                   className={`${isMobile ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity duration-150 ${deletingId === c.id ? 'text-red-400 opacity-60 cursor-not-allowed' : 'text-text-tertiary hover:text-red-400'}`}
                   onClick={(e) => { e.stopPropagation(); if (deletingId) return; void onDeleteChapter(c.id); }}
@@ -722,6 +795,7 @@ export function Workspace({ projectId }: { projectId: string }) {
                   {deletingId === c.id ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <Trash2 className="w-4 h-4" aria-hidden="true" />}
                   <span className="sr-only">Delete</span>
                 </button>
+                )}
               </div>
             );})}
           </div>
@@ -895,12 +969,14 @@ export function Workspace({ projectId }: { projectId: string }) {
                   <div className="flex items-center gap-4 mb-6">
                     <input
                       value={title}
+                      readOnly={activeChapter?.isReadOnly}
                       onChange={(e) => onTitleChange(e.target.value)}
                       placeholder="Chapter Title"
                       dir="ltr"
-                      className="flex-1 bg-transparent border-none text-[32px] font-bold text-text-primary placeholder:text-text-tertiary outline-none tracking-tight text-left"
+                      className={`flex-1 bg-transparent border-none text-[32px] font-bold text-text-primary placeholder:text-text-tertiary outline-none tracking-tight text-left ${activeChapter?.isReadOnly ? 'opacity-80 cursor-default' : ''}`}
                     />
                     
+                    {!activeChapter?.isReadOnly && (
                     <div className="flex items-center gap-2">
                       <button 
                         onClick={() => {
@@ -927,13 +1003,14 @@ export function Workspace({ projectId }: { projectId: string }) {
                         </div>
                       )}
                     </div>
+                    )}
                   </div>
                   {/* Chapter Content - Contenteditable */}
                   <div
-                    contentEditable
+                    contentEditable={!activeChapter?.isReadOnly}
                     suppressContentEditableWarning
-                    onInput={(e) => onContentChange(e.currentTarget.textContent || '')}
-                    className="w-full min-h-[400px] text-lg leading-[1.8] text-text-primary outline-none text-left"
+                    onInput={(e) => !activeChapter?.isReadOnly && onContentChange(e.currentTarget.textContent || '')}
+                    className={`w-full min-h-[400px] text-lg leading-[1.8] text-text-primary outline-none text-left ${activeChapter?.isReadOnly ? 'cursor-default' : ''}`}
                     dir="ltr"
                     style={{ whiteSpace: 'pre-wrap', direction: 'ltr', textAlign: 'left', unicodeBidi: 'bidi-override' as any, writingMode: 'horizontal-tb' as any }}
                     ref={editorRef}
@@ -1021,7 +1098,7 @@ export function Workspace({ projectId }: { projectId: string }) {
                       <button className="px-3 py-1.5 rounded-md bg-accent hover:bg-accent-hover text-white disabled:opacity-50" disabled={creatingChat} onClick={async ()=>{
                         setCreatingChat(true); setCreateChatError(null);
                         try {
-                          const c = await api.createChat(projectId, { type: newChatType, title: newChatTitle || undefined });
+                          const c = await api.createChat(projectId, { type: newChatType, title: newChatTitle || undefined, branchId });
                           setChats((prev)=>[...prev, c]);
                           setActiveChatId(c.id);
                           setNewChatOpen(false);
@@ -1165,7 +1242,7 @@ export function Workspace({ projectId }: { projectId: string }) {
                       <button className="px-3 py-1.5 rounded-md bg-accent hover:bg-accent-hover text-white disabled:opacity-50" disabled={creatingChat} onClick={async ()=>{
                         setCreatingChat(true); setCreateChatError(null);
                         try {
-                          const c = await api.createChat(projectId, { type: newChatType, title: newChatTitle || undefined });
+                          const c = await api.createChat(projectId, { type: newChatType, title: newChatTitle || undefined, branchId });
                           setChats((prev)=>[...prev, c]);
                           setActiveChatId(c.id);
                           setNewChatOpen(false);
@@ -1275,8 +1352,71 @@ export function Workspace({ projectId }: { projectId: string }) {
 
       {toastMsg && (
         <div className="fixed top-4 right-4 z-50 animate-in slide-in-from-bottom-4 duration-200">
-          <div className="px-4 py-3 rounded-lg bg-bg-elevated border border-border-default text-text-primary text-sm shadow-elevation">
-            {toastMsg}
+          <div className="px-4 py-3 rounded-lg bg-bg-elevated border border-border-default text-text-primary text-sm shadow-elevation flex items-center gap-3">
+            <span>{toastMsg}</span>
+            <button
+              onClick={() => setToastMsg("")}
+              className="text-text-tertiary hover:text-text-primary transition-colors"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal with Branch Warning */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-md bg-bg-elevated rounded-lg shadow-2xl border border-border-default p-6">
+            <button
+              onClick={() => setDeleteConfirm(null)}
+              className="absolute top-3 right-3 text-text-tertiary hover:text-text-primary transition"
+            >
+              <X size={18} />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 bg-red-500/10 rounded-full">
+                <AlertTriangle className="w-6 h-6 text-red-500" />
+              </div>
+              <h2 className="text-lg font-bold text-text-primary">Delete Chapter</h2>
+            </div>
+
+            <div className="mb-4">
+              <p className="text-sm text-text-primary mb-3">
+                Are you sure you want to delete <strong>"{deleteConfirm.title}"</strong>?
+              </p>
+              
+              <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
+                <p className="text-sm text-red-400 font-medium mb-2">
+                  ⚠️ This will also delete the following branches:
+                </p>
+                <ul className="list-disc list-inside text-sm text-red-300">
+                  {deleteConfirm.branchNames.map((name, idx) => (
+                    <li key={idx}>{name}</li>
+                  ))}
+                </ul>
+                <p className="text-xs text-red-400/70 mt-2">
+                  All chapters within these branches will be permanently deleted.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="flex-1 rounded-lg border border-border-default px-4 py-2 text-sm text-text-secondary hover:bg-bg-hover transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => executeDeleteChapter(deleteConfirm.chapterId)}
+                disabled={deletingId !== null}
+                className="flex-1 rounded-lg bg-red-500 px-4 py-2 text-sm font-semibold text-white hover:bg-red-600 transition disabled:opacity-50"
+              >
+                {deletingId ? "Deleting..." : "Delete All"}
+              </button>
+            </div>
           </div>
         </div>
       )}

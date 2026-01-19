@@ -4,6 +4,7 @@ import { prisma } from '../db/prisma';
 import { createClient } from '@supabase/supabase-js';
 import { awardExpForAction, countWords } from '../utils/expAwarder';
 import { exportProjectAsJson, exportProjectAsMarkdown, exportProjectAsText } from '../utils/projectExporter';
+import { getBranchContextChapters } from '../services/branchService';
 const ChatTypeEnum = z.enum(['plot','character','world']);
 
 const sbUrl = process.env.SUPABASE_URL;
@@ -89,14 +90,19 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
   // --- Chats (per project) ---
   app.get('/project/:id/chats', async (req, reply) => {
     const params = uuidParam.parse(req.params);
+    const query = z.object({ branchId: z.string().uuid().optional() }).parse(req.query);
     const user = (req as any).user;
     if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
 
     const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true } });
     if (!project) return reply.code(404).send({ error: 'Not found' });
 
+    // Filter chats by branchId (or null for main project)
     const chats = await (prisma as any).chat.findMany({
-      where: { projectId: project.id },
+      where: { 
+        projectId: project.id,
+        branchId: query.branchId || null 
+      },
       orderBy: { createdAt: 'asc' },
       select: { id: true, type: true, title: true, createdAt: true, updatedAt: true },
     } as any);
@@ -108,15 +114,39 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     const user = (req as any).user;
     if (!user?.id) return reply.code(401).send({ error: 'Unauthorized' });
 
-    const body = z.object({ type: ChatTypeEnum, title: z.string().optional() }).parse(req.body);
+    const body = z.object({ 
+      type: ChatTypeEnum, 
+      title: z.string().optional(),
+      branchId: z.string().uuid().optional() 
+    }).parse(req.body);
+    
     const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true } });
     if (!project) return reply.code(404).send({ error: 'Not found' });
 
-    // Default title using total count only (avoid touching enum column to bypass casting issues)
-    const totalChats = await prisma.chat.count({ where: { projectId: project.id } as any });
-    const defaultTitle = body.type === 'plot' ? `Plot Chat ${totalChats + 1}` : (body.type === 'character' ? `Character Chat ${totalChats + 1}` : `World Chat ${totalChats + 1}`);
+    // If branchId provided, verify it belongs to project
+    if (body.branchId) {
+      const branch = await prisma.branch.findFirst({ where: { id: body.branchId, projectId: project.id } });
+      if (!branch) return reply.code(400).send({ error: 'Invalid branch' });
+    }
+
+    // Default title using total count for this scope
+    const totalChats = await prisma.chat.count({ 
+      where: { 
+        projectId: project.id,
+        branchId: body.branchId || null
+      } as any 
+    });
+    
+    const scopeName = body.branchId ? 'Branch' : '';
+    const defaultTitle = body.type === 'plot' ? `${scopeName} Plot Chat ${totalChats + 1}` : (body.type === 'character' ? `${scopeName} Character Chat ${totalChats + 1}` : `${scopeName} World Chat ${totalChats + 1}`);
+    
     const created = await (prisma as any).chat.create({
-      data: { projectId: project.id, type: body.type as any, title: (body.title && body.title.trim()) || defaultTitle },
+      data: { 
+        projectId: project.id, 
+        branchId: body.branchId || null,
+        type: body.type as any, 
+        title: (body.title && body.title.trim()) || defaultTitle 
+      },
       select: { id: true, type: true, title: true, createdAt: true },
     } as any);
     return reply.code(201).send(created);
@@ -157,6 +187,23 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
 
     const body = createChapterBody.parse(req.body);
 
+    let newOrder = 1;
+    if (body.branchId) {
+      // Branch context: calc from ancestors + existing branch chapters
+      const ctx = await getBranchContextChapters(body.branchId);
+      if (ctx.length > 0) {
+        newOrder = Math.max(...ctx.map(c => c.order)) + 1;
+      }
+    } else {
+      // Main timeline: calc from max order of main chapters
+      const lastCh = await prisma.chapter.findFirst({
+        where: { projectId: project.id, branchId: null },
+        orderBy: { order: 'desc' },
+        select: { order: true }
+      });
+      if (lastCh) newOrder = lastCh.order + 1;
+    }
+
     const chapter = await prisma.chapter.create({
       data: {
         projectId: project.id,
@@ -169,6 +216,7 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
         branchId: body.branchId ?? null,
         // @ts-ignore
         isCanon: body.isCanon ?? true,
+        order: newOrder,
       },
       select: { id: true, title: true, createdAt: true },
     });
@@ -236,15 +284,32 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     const project = await prisma.project.findFirst({ where: { id: params.id, userId: user.id }, select: { id: true } });
     if (!project) return reply.code(404).send({ error: 'Not found' });
 
-    const result = await prisma.$transaction(async (tx) => {
-      await tx.chatMessage.updateMany({ where: { panelId: params.chapterId }, data: { panelId: null } });
-      await tx.branch.updateMany({ where: { baseChapterId: params.chapterId }, data: { baseChapterId: null } });
-      const del = await tx.chapter.deleteMany({ where: { id: params.chapterId, projectId: project.id } });
-      return del.count;
+    // Check if this chapter is a base for any branches
+    const branchesFromChapter = await prisma.branch.findMany({
+      where: { baseChapterId: params.chapterId },
+      select: { id: true, name: true }
     });
 
-    if (result === 0) return reply.code(404).send({ error: 'Not found' });
-    return reply.code(204).send();
+    const result = await prisma.$transaction(async (tx) => {
+      // Clear panel references
+      await tx.chatMessage.updateMany({ where: { panelId: params.chapterId }, data: { panelId: null } });
+      
+      // If this chapter is a base for branches, cascade delete them
+      if (branchesFromChapter.length > 0) {
+        const branchIds = branchesFromChapter.map(b => b.id);
+        // Delete all chapters in those branches
+        await tx.chapter.deleteMany({ where: { branchId: { in: branchIds } } });
+        // Delete the branches themselves
+        await tx.branch.deleteMany({ where: { id: { in: branchIds } } });
+      }
+      
+      // Delete the chapter
+      const del = await tx.chapter.deleteMany({ where: { id: params.chapterId, projectId: project.id } });
+      return { count: del.count, deletedBranches: branchesFromChapter.map(b => b.name) };
+    });
+
+    if (result.count === 0) return reply.code(404).send({ error: 'Not found' });
+    return reply.send({ success: true, deletedBranches: result.deletedBranches });
   });
 
   // --- World Settings CRUD ---
@@ -570,7 +635,9 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
 
     const qp = z.object({
       page: z.coerce.number().int().min(0).default(0),
-      limit: z.coerce.number().int().min(1).max(100).default(20),
+      limit: z.coerce.number().int().min(1).max(1000).default(20),
+      includeBranches: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
+      branchId: z.string().uuid().optional(),
     }).parse((req as any).query || {});
 
     // Owner access if authenticated
@@ -585,15 +652,51 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
       accessProject = pub as any;
     }
 
-    const total = await prisma.chapter.count({ where: { projectId: (accessProject as any).id, ...(user?.id ? {} : { isCanon: true as any }) } });
-    const items = await prisma.chapter.findMany({
-      where: { projectId: (accessProject as any).id, ...(user?.id ? {} : { isCanon: true as any }) },
-      orderBy: { createdAt: 'asc' },
-      skip: qp.page * qp.limit,
-      take: qp.limit,
-      // @ts-ignore
-      select: { id: true, title: true, content: true, panelScript: true, createdAt: true, price: true },
-    });
+    let items: any[] = [];
+    let total = 0;
+
+    if (qp.branchId) {
+       // Validate branch
+       const branch = await prisma.branch.findFirst({ where: { id: qp.branchId, projectId: accessProject.id } });
+       if (!branch) return reply.code(404).send({ error: 'Branch not found' });
+
+       const allContext = await getBranchContextChapters(qp.branchId);
+       const fullList = allContext.map(c => ({
+         id: c.id, 
+         title: c.title, 
+         content: c.content, 
+         createdAt: c.createdAt, 
+         price: c.price,
+         branchId: c.branchId,
+         order: c.order
+       }));
+       
+       total = fullList.length;
+       items = fullList.slice(qp.page * qp.limit, (qp.page + 1) * qp.limit);
+       
+        // Fetch panel scripts
+        const ids = items.map(i => i.id);
+        if (ids.length > 0) {
+            const details = await prisma.chapter.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, panelScript: true }
+            });
+            const scriptMap = new Map(details.map(d => [d.id, d.panelScript]));
+            items.forEach(i => {
+                i.panelScript = scriptMap.get(i.id);
+            });
+        }
+    } else {
+        total = await prisma.chapter.count({ where: { projectId: (accessProject as any).id, ...(user?.id ? {} : { isCanon: true as any }), ...(qp.includeBranches ? {} : { branchId: null }) } });
+        items = await prisma.chapter.findMany({
+            where: { projectId: (accessProject as any).id, ...(user?.id ? {} : { isCanon: true as any }), ...(qp.includeBranches ? {} : { branchId: null }) },
+            orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
+            skip: qp.page * qp.limit,
+            take: qp.limit,
+            // @ts-ignore
+            select: { id: true, title: true, content: true, panelScript: true, createdAt: true, price: true, branchId: true, order: true },
+        });
+    }
 
     // Post-process to mask content if locked
     if (!user?.id && items.some(i => (i as any).price > 0)) {
@@ -1036,7 +1139,10 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     const { slug } = z.object({ slug: z.string().min(1) }).parse(req.params as any);
     const project = await (prisma as any).project.findFirst({
       where: { publicSlug: slug, visibility: 'public' },
-      select: { id: true, title: true, description: true, coverImage: true, mode: true, genres: true, createdAt: true },
+      select: { 
+        id: true, title: true, description: true, coverImage: true, mode: true, genres: true, createdAt: true,
+        branches: { select: { id: true, name: true, createdAt: true }, orderBy: { createdAt: 'asc' } }
+      },
     } as any);
     if (!project) return reply.code(404).send({ error: 'Not found' });
     return reply.send(project);
@@ -1044,21 +1150,79 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
 
   app.get('/public/project/:slug/chapters', async (req, reply) => {
     const { slug } = z.object({ slug: z.string().min(1) }).parse(req.params as any);
-    const qp = z.object({ page: z.coerce.number().int().min(0).default(0), limit: z.coerce.number().int().min(1).max(100).default(20) }).parse((req as any).query || {});
+    const qp = z.object({ 
+      page: z.coerce.number().int().min(0).default(0), 
+      limit: z.coerce.number().int().min(1).max(1000).default(20),
+      includeBranches: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
+      branchId: z.string().uuid().optional(), 
+    }).parse((req as any).query || {});
     const user = (req as any).user; 
 
     const project = await (prisma as any).project.findFirst({ where: { publicSlug: slug, visibility: 'public' }, select: { id: true, userId: true } } as any);
     if (!project) return reply.code(404).send({ error: 'Not found' });
-    const total = await prisma.chapter.count({ where: { projectId: project.id, isCanon: true as any } });
-    
-    // Select price
-    const items = await prisma.chapter.findMany({
-      where: { projectId: project.id, isCanon: true as any },
-      orderBy: { createdAt: 'asc' },
-      skip: qp.page * qp.limit,
-      take: qp.limit,
-      select: { id: true, title: true, content: true, panelScript: true, createdAt: true, price: true },
-    });
+
+    let items: any[] = [];
+    let total = 0;
+
+    if (qp.branchId) {
+      // If branchId is provided, perform validation: branch must belong to this project
+      const branch = await prisma.branch.findFirst({ where: { id: qp.branchId, projectId: project.id } });
+      if (!branch) return reply.code(404).send({ error: 'Branch not found' });
+
+      // Fetch inherited context + branch chapters using the service
+      const allContext = await getBranchContextChapters(qp.branchId);
+      // Filter out any non-canon/hidden chapters if needed? 
+      // Assuming public branches expose all chapters or canon logic is inside the service?
+      // branchService returns raw chapter data. We should probably filter isCanon if logic demands, currently service returns all.
+      // For public reading, usually we only want "isCanon=true" but branches might be experimental. 
+      // For now, we assume branch chapters are public if the project is public.
+      
+      const fullList = allContext.map(c => ({
+        id: c.id, 
+        title: c.title, 
+        content: c.content, 
+        // Service doesn't return panelScript by default type ChapterContext, we may need to adjust service or fetch here.
+        // Wait, ChapterContext in service HAS content, but NOT panelScript.
+        // We need panelScript for the Reader if it supports Panel View.
+        // The service logic selects specific fields.
+        createdAt: c.createdAt, 
+        price: c.price,
+        branchId: c.branchId
+        // We need to fetch panelScript if missing or update service.
+      }));
+      
+      // Pagination for branch context is tricky because it's a linear full list return.
+      // We'll mimic pagination by slicing the result array.
+      total = fullList.length;
+      items = fullList.slice(qp.page * qp.limit, (qp.page + 1) * qp.limit);
+      
+      // Fetch panel scripts for these items separately since service didn't include them to save bandwidth?
+      // Or we should update service. Updating service affects other consumers (Chat Context).
+      // Chat Context doesn't need panelScript.
+      // Better to fetch panelScripts for just the sliced items here.
+      const ids = items.map(i => i.id);
+      if (ids.length > 0) {
+        const details = await prisma.chapter.findMany({
+          where: { id: { in: ids } },
+          select: { id: true, panelScript: true }
+        });
+        const scriptMap = new Map(details.map(d => [d.id, d.panelScript]));
+        items.forEach(i => {
+          i.panelScript = scriptMap.get(i.id);
+        });
+      }
+
+    } else {
+      // Default: Main Timeline
+      total = await prisma.chapter.count({ where: { projectId: project.id, isCanon: true as any, branchId: null } });
+      items = await prisma.chapter.findMany({
+        where: { projectId: project.id, isCanon: true as any, branchId: null },
+        orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
+        skip: qp.page * qp.limit,
+        take: qp.limit,
+        select: { id: true, title: true, content: true, panelScript: true, createdAt: true, price: true },
+      });
+    }
 
     // Masking Logic
     const paidChapters = items.filter((i: any) => i.price > 0).map(i => i.id);
@@ -1120,6 +1284,196 @@ const routes: FastifyPluginCallback = (app, _opts, done) => {
     return reply.send({ items: enriched, total });
   });
 
+  // ============ BRANCHING ENDPOINTS ============
+  
+  // Create a new branch from a chapter
+  app.post('/project/:id/branch', { preHandler: [app.auth] }, async (req, reply) => {
+    const { id } = uuidParam.parse(req.params);
+    const { name, baseChapterId } = z.object({
+      name: z.string().min(1),
+      baseChapterId: z.string().uuid().optional()
+    }).parse(req.body);
+    
+    const user = req.user;
+    if (!user) return reply.status(401).send({ error: 'Unauthorized' });
+
+    // Verify project ownership
+    const project = await prisma.project.findUnique({ where: { id }, select: { userId: true } });
+    if (!project || project.userId !== user.id) {
+      return reply.status(404).send({ error: 'Project not found' });
+    }
+
+    // Create the branch
+    const branch = await prisma.branch.create({
+      data: {
+        projectId: id,
+        name,
+        baseChapterId: baseChapterId || null
+      }
+    });
+
+    return reply.send(branch);
+  });
+
+  // Get all branches for a project
+  app.get('/project/:id/branches', { preHandler: [app.auth] }, async (req, reply) => {
+    const { id } = uuidParam.parse(req.params);
+    const user = req.user;
+    if (!user) return reply.status(401).send({ error: 'Unauthorized' });
+
+    // Verify project ownership
+    const project = await prisma.project.findUnique({ where: { id }, select: { userId: true } });
+    if (!project || project.userId !== user.id) {
+      return reply.status(404).send({ error: 'Project not found' });
+    }
+
+    const branches = await prisma.branch.findMany({
+      where: { projectId: id },
+      orderBy: { createdAt: 'asc' },
+      include: {
+        baseChapter: {
+          select: { id: true, title: true }
+        }
+      }
+    });
+
+    return reply.send(branches);
+  });
+
+  // Get chapters for a specific branch
+  app.get('/branches/:branchId/chapters', { preHandler: [app.auth] }, async (req, reply) => {
+    const { branchId } = z.object({ branchId: z.string().uuid() }).parse(req.params);
+    const user = req.user;
+    if (!user) return reply.status(401).send({ error: 'Unauthorized' });
+
+    // Verify branch exists and user owns the project
+    const branch = await prisma.branch.findUnique({
+      where: { id: branchId },
+      include: { project: { select: { userId: true } } }
+    });
+
+    if (!branch || branch.project.userId !== user.id) {
+      return reply.status(404).send({ error: 'Branch not found' });
+    }
+
+    const chapters = await prisma.chapter.findMany({
+      where: { branchId },
+      orderBy: { order: 'asc' },
+      select: {
+        id: true,
+        title: true,
+        order: true,
+        price: true,
+        createdAt: true,
+        updatedAt: true
+      }
+    });
+
+    return reply.send(chapters);
+  });
+
+  // Get branch details with inherited context chapters (for workspace)
+  app.get('/branches/:branchId/context', { preHandler: [app.auth] }, async (req, reply) => {
+    const { branchId } = z.object({ branchId: z.string().uuid() }).parse(req.params);
+    const user = (req as any).user;
+    if (!user) return reply.status(401).send({ error: 'Unauthorized' });
+
+    const branch = await prisma.branch.findUnique({
+      where: { id: branchId },
+      include: { 
+        project: { select: { id: true, userId: true, title: true } },
+        baseChapter: { select: { id: true, order: true } }
+      }
+    });
+
+    if (!branch || branch.project.userId !== user.id) {
+      return reply.status(404).send({ error: 'Branch not found' });
+    }
+
+    // Use recursive service to get full ancestry
+    const allContext = await getBranchContextChapters(branchId);
+    
+    // Split into inherited (ancestry) and current branch chapters
+    const inheritedChapters = allContext.filter(c => c.branchId !== branchId);
+    const branchChapters = allContext.filter(c => c.branchId === branchId);
+
+    return reply.send({ branch, inheritedChapters, branchChapters });
+  });
+
+  // Update chapter order within a branch
+  app.put('/chapters/:chapterId/order', { preHandler: [app.auth] }, async (req, reply) => {
+    const { chapterId } = z.object({ chapterId: z.string().uuid() }).parse(req.params);
+    const { order } = z.object({ order: z.number().int().min(0) }).parse(req.body);
+    const user = req.user;
+    if (!user) return reply.status(401).send({ error: 'Unauthorized' });
+
+    // Verify chapter exists and user owns the project
+    const chapter = await prisma.chapter.findUnique({
+      where: { id: chapterId },
+      include: { project: { select: { userId: true } } }
+    });
+
+    if (!chapter || chapter.project.userId !== user.id) {
+      return reply.status(404).send({ error: 'Chapter not found' });
+    }
+
+    const updated = await prisma.chapter.update({
+      where: { id: chapterId },
+      data: { order }
+    });
+
+    return reply.send(updated);
+  });
+
+  // Update branch name
+  app.patch('/branches/:branchId', { preHandler: [app.auth] }, async (req, reply) => {
+    const { branchId } = z.object({ branchId: z.string().uuid() }).parse(req.params);
+    const { name } = z.object({ name: z.string().min(1) }).parse(req.body);
+    const user = req.user;
+    if (!user) return reply.status(401).send({ error: 'Unauthorized' });
+
+    // Verify branch exists and user owns the project
+    const branch = await prisma.branch.findUnique({
+      where: { id: branchId },
+      include: { project: { select: { userId: true } } }
+    });
+
+    if (!branch || branch.project.userId !== user.id) {
+      return reply.status(404).send({ error: 'Branch not found' });
+    }
+
+    const updated = await prisma.branch.update({
+      where: { id: branchId },
+      data: { name }
+    });
+
+    return reply.send(updated);
+  });
+
+  // Delete branch
+  app.delete('/branches/:branchId', { preHandler: [app.auth] }, async (req, reply) => {
+    const { branchId } = z.object({ branchId: z.string().uuid() }).parse(req.params);
+    const user = req.user;
+    if (!user) return reply.status(401).send({ error: 'Unauthorized' });
+
+    // Verify branch exists and user owns the project
+    const branch = await prisma.branch.findUnique({
+      where: { id: branchId },
+      include: { project: { select: { userId: true } } }
+    });
+
+    if (!branch || branch.project.userId !== user.id) {
+      return reply.status(404).send({ error: 'Branch not found' });
+    }
+
+    // Delete all chapters in this branch, then delete the branch
+    await prisma.$transaction(async (tx) => {
+      await tx.chapter.deleteMany({ where: { branchId } });
+      await tx.branch.delete({ where: { id: branchId } });
+    });
+
+    return reply.status(204).send();
+  });
 
   done();
 };

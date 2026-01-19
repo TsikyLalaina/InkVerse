@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState, useRef, memo } from "react";
 import { useRouter } from "next/navigation";
 import { useSupabase } from "@/components/providers/SupabaseProvider";
 import { createApi } from "@/lib/api";
-import { BookOpen, Lock, Coins, Loader2 } from "lucide-react";
+import { BookOpen, Lock, Coins, Loader2, GitBranch } from "lucide-react";
 import { useTheme } from "@/components/providers/ThemeProvider";
 import type { ReaderSettings } from "@/components/ReaderView";
 
@@ -501,6 +501,8 @@ function PublicReaderOverlay({ slug, initialMode, onClose }: { slug: string; ini
   const [hideTopBar, setHideTopBar] = useState(false);
   const [overlayOpacity, setOverlayOpacity] = useState(0.6);
   const [overlayBlur, setOverlayBlur] = useState(12);
+  const [projectDetails, setProjectDetails] = useState<any>(null);
+  const [selectedBranchId, setSelectedBranchId] = useState<string | undefined>(undefined);
   const [readerSettings, setReaderSettings] = useState<ReaderSettings>({
     fontSize: 16,
     lineHeight: 1.6,
@@ -567,19 +569,24 @@ function PublicReaderOverlay({ slug, initialMode, onClose }: { slug: string; ini
 
   const [chaptersLoading, setChaptersLoading] = useState(true);
 
+  // Load project details (branches)
+  useEffect(() => {
+    api.getPublicProject(slug).then(setProjectDetails).catch(console.error);
+  }, [slug, api]);
+
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
         setChaptersLoading(true);
         // Load chapters from public API
-        const first = await api.getPublicChapters(slug, 0, 100);
+        const first = await api.getPublicChapters(slug, 0, 100, selectedBranchId);
         if (!mounted) return;
         let all = first.items as Array<{ id: string; title: string }>;
         const total = typeof first.total === 'number' ? first.total : all.length;
         let page = 1;
         while (all.length < total) {
-          const next = await api.getPublicChapters(slug, page, 100);
+          const next = await api.getPublicChapters(slug, page, 100, selectedBranchId);
           all = all.concat(next.items as Array<{ id: string; title: string }>);
           page += 1;
           if (!mounted) return;
@@ -595,7 +602,7 @@ function PublicReaderOverlay({ slug, initialMode, onClose }: { slug: string; ini
       }
     })();
     return () => { mounted = false; };
-  }, [slug, api]);
+  }, [slug, api, selectedBranchId]);
 
   // LocalStorage hydration (fast)
   useEffect(() => {
@@ -700,21 +707,40 @@ function PublicReaderOverlay({ slug, initialMode, onClose }: { slug: string; ini
         <div className="flex items-center gap-4">
           <button
             onClick={onClose}
-            className="text-text-secondary hover:text-text-primary transition-colors"
+            className="opacity-70 hover:opacity-100 transition-opacity"
             title="Close reader"
           >
             ✕
           </button>
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="text-text-secondary hover:text-text-primary transition-colors"
+            className="opacity-70 hover:opacity-100 transition-opacity"
             title={sidebarOpen ? "Hide chapters" : "Show chapters"}
           >
             {sidebarOpen ? '☰' : '☰'}
           </button>
-          <div className="text-sm font-semibold text-text-primary">Public Reader</div>
+          <div className="text-sm font-semibold opacity-100">Public Reader</div>
         </div>
         <div className="flex items-center gap-3">
+          {/* Branch Selector */}
+          {projectDetails?.branches && projectDetails.branches.length > 0 && (
+            <div className="flex items-center gap-1 rounded-md border border-current/20 px-2 py-1 bg-white/5">
+              <GitBranch className="w-3.5 h-3.5 opacity-50" />
+              <select
+                value={selectedBranchId || ""}
+                onChange={(e) => setSelectedBranchId(e.target.value || undefined)}
+                className="bg-transparent text-sm outline-none max-w-[120px] text-inherit [&>option]:bg-slate-800 [&>option]:text-white"
+                style={{
+                  colorScheme: readerSettings.localTheme === 'dark' || (readerSettings.localTheme === 'inherit' && isDark) ? 'dark' : 'light',
+                }}
+              >
+                <option value="">Main Story</option>
+                {projectDetails.branches.map((b: any) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <select
             value={mode}
             onChange={(e) => setMode(e.target.value as any)}
@@ -725,13 +751,13 @@ function PublicReaderOverlay({ slug, initialMode, onClose }: { slug: string; ini
           </select>
           <button
             onClick={() => setSettingsOpen(v => !v)}
-            className="rounded-md border border-border-default px-3 py-1 text-sm text-text-secondary hover:bg-bg-hover transition-colors"
+            className="rounded-md border border-current/20 px-3 py-1 text-sm opacity-70 hover:opacity-100 transition-opacity"
           >
             Settings
           </button>
           <button
             onClick={toggleFs}
-            className="text-text-secondary hover:text-text-primary transition-colors p-1"
+            className="opacity-70 hover:opacity-100 transition-opacity p-1"
             title={fs ? "Exit fullscreen" : "Enter fullscreen"}
           >
             {fs ? (
@@ -780,7 +806,7 @@ function PublicReaderOverlay({ slug, initialMode, onClose }: { slug: string; ini
         {/* Main content */}
         <div className="flex-1 overflow-y-auto bg-transparent text-text-primary">
           {activeCh ? (
-            <ChapterContent slug={slug} chapterId={activeCh} mode={mode} readerSettings={readerSettings} />
+            <ChapterContent slug={slug} chapterId={activeCh} branchId={selectedBranchId} mode={mode} readerSettings={readerSettings} />
           ) : (
             <div className="flex items-center justify-center h-full text-text-secondary">
               No chapters available
@@ -877,7 +903,7 @@ function PublicReaderOverlay({ slug, initialMode, onClose }: { slug: string; ini
   );
 }
 
-function ChapterContent({ slug, chapterId, mode, readerSettings }: { slug: string; chapterId: string; mode: "novel" | "manhwa"; readerSettings: ReaderSettings; }) {
+function ChapterContent({ slug, chapterId, branchId, mode, readerSettings }: { slug: string; chapterId: string; branchId?: string; mode: "novel" | "manhwa"; readerSettings: ReaderSettings; }) {
   const supabase = useSupabase();
   const api = useMemo(() => createApi(supabase), [supabase]);
   const [chapter, setChapter] = useState<any>(null);
@@ -896,7 +922,7 @@ function ChapterContent({ slug, chapterId, mode, readerSettings }: { slug: strin
         let hasMore = true;
 
         while (hasMore) {
-          const res = await api.getPublicChapters(slug, page, 100);
+          const res = await api.getPublicChapters(slug, page, 100, branchId);
           allChapters = allChapters.concat(res.items as any[]);
           hasMore = allChapters.length < (res.total || 0);
           page++;
@@ -913,7 +939,7 @@ function ChapterContent({ slug, chapterId, mode, readerSettings }: { slug: strin
       }
     })();
     return () => { mounted = false; };
-  }, [slug, chapterId, api]);
+  }, [slug, chapterId, api, branchId]);
 
   // Unlock State
   const [unlockTarget, setUnlockTarget] = useState<{ id: string; price: number } | null>(null);

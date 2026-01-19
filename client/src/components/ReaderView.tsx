@@ -7,6 +7,8 @@ import AutoSizer from 'react-virtualized-auto-sizer';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { useTheme } from '@/components/providers/ThemeProvider';
 import { createApi } from '@/lib/api';
+import UnlockModal from './monetization/UnlockModal';
+import { Lock } from 'lucide-react';
 
 // Chapter shape based on backend response
 type Chapter = {
@@ -46,6 +48,7 @@ export function ReaderView({
   targetScrollPercent,
   onProgress,
   readerSettings,
+  branchId,
 }: {
   projectId: string;
   mode: ReaderMode;
@@ -55,6 +58,7 @@ export function ReaderView({
   targetScrollPercent?: number | null;
   onProgress?: (percent: number, meta?: { index: number; total: number; id?: string }) => void;
   readerSettings?: ReaderSettings;
+  branchId?: string;
 }) {
   const supabase = useSupabase();
   const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -74,7 +78,7 @@ export function ReaderView({
       try {
         setLoading(true);
         setError(null);
-        const { items, total } = await api.listChaptersPaginated(projectId, 0, 20);
+        const { items, total } = await api.listChaptersPaginated(projectId, 0, 20, false, branchId);
         if (!mounted) return;
         setChapters(items as Chapter[]);
         setTotal(typeof total === 'number' ? total : null);
@@ -87,7 +91,7 @@ export function ReaderView({
     }
     void loadFirst();
     return () => { mounted = false; };
-  }, [projectId, supabase]);
+  }, [projectId, supabase, branchId]);
 
   const loadMore = useCallback(async () => {
     if (loadingMore || loading) return;
@@ -95,7 +99,7 @@ export function ReaderView({
     setLoadingMore(true);
     try {
       const api = createApi(supabase);
-      const { items } = await api.listChaptersPaginated(projectId, page, 20);
+      const { items } = await api.listChaptersPaginated(projectId, page, 20, false, branchId);
       setChapters((prev) => [...prev, ...(items as Chapter[])]);
       setPage((p) => p + 1);
     } catch (e: any) {
@@ -103,7 +107,7 @@ export function ReaderView({
     } finally {
       setLoadingMore(false);
     }
-  }, [chapters.length, loading, loadingMore, page, projectId, supabase, total]);
+  }, [chapters.length, loading, loadingMore, page, projectId, supabase, total, branchId]);
 
   // Extract image URLs from panelScript in manhwa mode
   const images = useMemo(() => {
@@ -261,7 +265,7 @@ export function ReaderView({
       let nextPage = page;
       while (!has && (total === null || chapters.length < total)) {
         try {
-          const { items } = await api.listChaptersPaginated(projectId, nextPage, 20);
+          const { items } = await api.listChaptersPaginated(projectId, nextPage, 20, false, branchId);
           if (cancelled) return;
           if (!items || (items as any[]).length === 0) break;
           setChapters((prev) => {
@@ -286,7 +290,7 @@ export function ReaderView({
       });
     })();
     return () => { cancelled = true; };
-  }, [mode, targetChapterId, chapters, page, projectId, supabase, total]);
+  }, [mode, targetChapterId, chapters, page, projectId, supabase, total, branchId]);
 
   // Handle external navigation target for manhwa (panel index)
   useEffect(() => {
@@ -562,5 +566,4 @@ function LockedChapterPlaceholder({ price, onUnlock }: { price: number; onUnlock
   );
 }
 
-import UnlockModal from './monetization/UnlockModal';
-import { Lock } from 'lucide-react';
+
