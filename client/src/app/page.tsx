@@ -9,7 +9,7 @@ const MuseSection = dynamic(() => import('@/components/MuseSection'), { ssr: fal
 const RulesSection = dynamic(() => import('@/components/RulesSection'), { ssr: false });
 const FromTextToPanels = dynamic(() => import('@/components/FromTextToPanels'), { ssr: false });
 const Testimonials = dynamic(() => import('@/components/Testimonials'), { ssr: false });
-const Investor = dynamic(() => import('@/components/Investor'), { ssr: false });
+const ContactForm = dynamic(() => import('@/components/ContactForm'), { ssr: false });
 const AwakenCTA = dynamic(() => import('@/components/AwakenCTA'), { ssr: false });
 
 export const metadata = {
@@ -30,7 +30,7 @@ export default function Home() {
       <RulesSection />
       <FromTextToPanels />
       <Testimonials />
-      <Investor />
+      <ContactForm />
       <AwakenCTA />
     </main>
   );

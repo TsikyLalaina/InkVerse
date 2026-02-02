@@ -8,8 +8,6 @@ import projectRoutes from './routes/project';
 import chatRoutes from './routes/chat';
 import generateRoutes, { webhookPlugin as falWebhook } from './routes/generate';
 import paymentRoutes from './routes/payment';
-
-// ... imports
 import userRoutes from './routes/user';
 
 const app = fastify({
